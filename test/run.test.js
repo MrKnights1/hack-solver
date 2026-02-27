@@ -307,6 +307,142 @@ describe('parseRowCodes edge cases', () => {
     });
 });
 
+// ===== normalizeText Tests =====
+
+describe('normalizeText', () => {
+    it('maps Greek look-alike uppercase to Latin', () => {
+        assert.equal(OCR.normalizeText('\u0391\u0392\u0395\u0396'), 'ABEZ');
+    });
+
+    it('maps Greek look-alike lowercase to Latin uppercase', () => {
+        assert.equal(OCR.normalizeText('\u03B1\u03B2\u03B5\u03B6'), 'ABEZ');
+    });
+
+    it('keeps unique Greek chars as uppercase', () => {
+        assert.equal(OCR.normalizeText('\u0393\u0394\u0398\u03A3'), '\u0393\u0394\u0398\u03A3');
+    });
+
+    it('uppercases Latin text', () => {
+        assert.equal(OCR.normalizeText('abCD'), 'ABCD');
+    });
+
+    it('leaves digits unchanged', () => {
+        assert.equal(OCR.normalizeText('5838'), '5838');
+    });
+});
+
+// ===== normalizeCodes Tests =====
+
+describe('normalizeCodes', () => {
+    it('normalizes Greek codes to consistent form', () => {
+        const codes = ['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393', '\u0395\u039F'];
+        const norm = OCR.normalizeCodes(codes);
+        assert.deepEqual(norm, ['E\u0394', 'PM', '\u0398\u0393', 'EO']);
+    });
+
+    it('no-op for pure Latin codes', () => {
+        const codes = ['FN', 'KW', 'QD', 'BX'];
+        assert.deepEqual(OCR.normalizeCodes(codes), ['FN', 'KW', 'QD', 'BX']);
+    });
+
+    it('no-op for numeric codes', () => {
+        const codes = ['58', '38', '69', '61'];
+        assert.deepEqual(OCR.normalizeCodes(codes), ['58', '38', '69', '61']);
+    });
+
+    it('handles mixed Greek/Latin OCR output consistently', () => {
+        const greekForm = OCR.normalizeCodes(['\u0395\u0394']);
+        const latinForm = OCR.normalizeCodes(['E\u0394']);
+        assert.deepEqual(greekForm, latinForm);
+    });
+
+    it('normalizes Braille and Rune codes unchanged', () => {
+        const braille = ['\u2801\u2809', '\u281B\u2813'];
+        assert.deepEqual(OCR.normalizeCodes(braille), ['\u2801\u2809', '\u281B\u2813']);
+        const runes = ['\u16A0\u16A6', '\u16B7\u16BA'];
+        assert.deepEqual(OCR.normalizeCodes(runes), ['\u16A0\u16A6', '\u16B7\u16BA']);
+    });
+});
+
+// ===== guessWhitelist Tests =====
+
+describe('guessWhitelist', () => {
+    it('returns digits for numeric codes', () => {
+        const wl = OCR.guessWhitelist(['58', '38', '69', '61']);
+        assert.equal(wl, '0123456789');
+    });
+
+    it('returns Latin for alpha codes', () => {
+        const wl = OCR.guessWhitelist(['FN', 'KW', 'QD', 'BX']);
+        assert.equal(wl, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+    });
+
+    it('returns Latin+digits for alphanum codes', () => {
+        const wl = OCR.guessWhitelist(['A5', 'C7', 'F1', 'H4']);
+        assert.equal(wl, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+    });
+
+    it('returns Latin+Greek for Greek codes', () => {
+        const wl = OCR.guessWhitelist(['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393']);
+        assert.ok(wl.includes('A'));
+        assert.ok(wl.includes('\u0391'));
+    });
+
+    it('returns empty for unknown charset', () => {
+        const wl = OCR.guessWhitelist(['\u2801\u2809']);
+        assert.equal(wl, '');
+    });
+});
+
+// ===== Greek normalized matching =====
+
+describe('Greek normalized matching', () => {
+    it('matches Greek target against Greek grid after normalization', () => {
+        const greekTarget = ['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393', '\u0395\u039F'];
+        const greekGrid = greekPool().slice(0, 80);
+        greekGrid[25] = '\u0395\u0394';
+        greekGrid[26] = '\u03A1\u039C';
+        greekGrid[27] = '\u0398\u0393';
+        greekGrid[28] = '\u0395\u039F';
+
+        const normTarget = OCR.normalizeCodes(greekTarget);
+        const normGrid = OCR.normalizeCodes(greekGrid);
+        const match = Matcher.findMatchByText(normTarget, normGrid);
+        assert.ok(match, 'should find match after normalization');
+        assert.equal(match.position, 25);
+    });
+
+    it('matches when OCR reads Greek as mixed Latin/Greek', () => {
+        const ocrTarget = ['E\u0394', 'P\u039C', '\u0398\u0393', 'EO'];
+        const ocrGrid = [];
+        for (let i = 0; i < 80; i++) ocrGrid.push('XX');
+        ocrGrid[40] = '\u0395\u0394';
+        ocrGrid[41] = '\u03A1\u039C';
+        ocrGrid[42] = '\u0398\u0393';
+        ocrGrid[43] = '\u0395\u039F';
+
+        const normTarget = OCR.normalizeCodes(ocrTarget);
+        const normGrid = OCR.normalizeCodes(ocrGrid);
+        const match = Matcher.findMatchByText(normTarget, normGrid);
+        assert.ok(match, 'should find match despite mixed Latin/Greek');
+        assert.equal(match.position, 40);
+    });
+
+    it('matches when grid reads as Latin but target reads as Greek', () => {
+        const greekTarget = ['\u0395\u0394', '\u03A1\u039C'];
+        const latinGrid = [];
+        for (let i = 0; i < 80; i++) latinGrid.push('XX');
+        latinGrid[10] = 'E\u0394';
+        latinGrid[11] = 'P\u039C';
+
+        const normTarget = OCR.normalizeCodes(greekTarget);
+        const normGrid = OCR.normalizeCodes(latinGrid);
+        const match = Matcher.findMatchByText(normTarget, normGrid);
+        assert.ok(match, 'should find match across Greek/Latin mismatch');
+        assert.equal(match.position, 10);
+    });
+});
+
 // ===== Matcher Edge Cases =====
 
 describe('Matcher edge cases', () => {

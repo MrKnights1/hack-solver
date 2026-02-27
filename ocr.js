@@ -1,45 +1,65 @@
 const OCR = (() => {
     let worker = null;
     let initialized = false;
-    let currentLang = '';
-    let detectedCharset = null;
 
     const SCALE = 3;
     const CODE_LEN = 2;
 
     const GREEK_UPPER = '\u0391\u0392\u0393\u0394\u0395\u0396\u0397\u0398\u0399\u039A\u039B\u039C\u039D\u039E\u039F\u03A0\u03A1\u03A3\u03A4\u03A5\u03A6\u03A7\u03A8\u03A9';
-    const GREEK_LOWER = '\u03B1\u03B2\u03B3\u03B4\u03B5\u03B6\u03B7\u03B8\u03B9\u03BA\u03BB\u03BC\u03BD\u03BE\u03BF\u03C0\u03C1\u03C3\u03C4\u03C5\u03C6\u03C7\u03C8\u03C9';
     const LATIN_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    const LATIN_LOWER = 'abcdefghijklmnopqrstuvwxyz';
     const DIGITS = '0123456789';
 
-    const CHARSETS = {
-        numeric: { lang: 'eng', whitelist: DIGITS },
-        alpha: { lang: 'eng', whitelist: LATIN_UPPER + LATIN_LOWER },
-        greek: { lang: 'ell', whitelist: GREEK_UPPER + GREEK_LOWER },
-        alphanum: { lang: 'eng', whitelist: DIGITS + LATIN_UPPER + LATIN_LOWER },
-        braille: { lang: 'eng', whitelist: '' },
-        runes: { lang: 'eng', whitelist: '' }
+    const GREEK_TO_LATIN = {
+        '\u0391': 'A', '\u0392': 'B', '\u0395': 'E', '\u0396': 'Z',
+        '\u0397': 'H', '\u0399': 'I', '\u039A': 'K', '\u039C': 'M',
+        '\u039D': 'N', '\u039F': 'O', '\u03A1': 'P', '\u03A4': 'T',
+        '\u03A5': 'Y', '\u03A7': 'X'
+    };
+
+    const GREEK_LOWER_TO_LATIN = {
+        '\u03B1': 'A', '\u03B2': 'B', '\u03B5': 'E', '\u03B6': 'Z',
+        '\u03B7': 'H', '\u03B9': 'I', '\u03BA': 'K', '\u03BC': 'M',
+        '\u03BD': 'N', '\u03BF': 'O', '\u03C1': 'P', '\u03C4': 'T',
+        '\u03C5': 'Y', '\u03C7': 'X'
     };
 
     const CODE_CHAR_RE = /[A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF]/;
     const CODE_CHARS_RE = /[^A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF]/g;
     const CODE_CHARS_SPACE_RE = /[^A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF\s]/g;
 
-    async function init(lang) {
-        lang = lang || 'eng';
-        if (initialized && currentLang === lang) return;
-        if (worker) await worker.terminate();
-        worker = await Tesseract.createWorker(lang, 1, { cacheMethod: 'write' });
-        currentLang = lang;
-        initialized = true;
+    function normalizeText(text) {
+        let result = '';
+        for (const ch of text) {
+            if (GREEK_TO_LATIN[ch]) result += GREEK_TO_LATIN[ch];
+            else if (GREEK_LOWER_TO_LATIN[ch]) result += GREEK_LOWER_TO_LATIN[ch];
+            else result += ch.toUpperCase();
+        }
+        return result;
     }
 
-    async function switchLang(lang) {
-        if (currentLang === lang && initialized) return;
-        if (worker) await worker.terminate();
-        worker = await Tesseract.createWorker(lang, 1, { cacheMethod: 'write' });
-        currentLang = lang;
+    function normalizeCodes(codes) {
+        return codes.map(code => normalizeText(code));
+    }
+
+    function guessWhitelist(codes) {
+        let hasDigit = false, hasLatin = false, hasGreek = false;
+        for (const code of codes) {
+            for (const ch of code) {
+                if (/[0-9]/.test(ch)) hasDigit = true;
+                else if (/[A-Za-z]/.test(ch)) hasLatin = true;
+                else if (/[\u0370-\u03FF]/.test(ch)) hasGreek = true;
+            }
+        }
+        if (hasGreek) return LATIN_UPPER + GREEK_UPPER;
+        if (hasLatin && hasDigit) return LATIN_UPPER + DIGITS;
+        if (hasLatin) return LATIN_UPPER;
+        if (hasDigit) return DIGITS;
+        return '';
+    }
+
+    async function init() {
+        if (initialized) return;
+        worker = await Tesseract.createWorker('eng+ell', 1, { cacheMethod: 'write' });
         initialized = true;
     }
 
@@ -136,95 +156,6 @@ const OCR = (() => {
         return { x, y, w, h };
     }
 
-    async function ocrRowWithLang(canvas, lang, whitelist) {
-        await switchLang(lang);
-        await worker.setParameters({
-            tessedit_pageseg_mode: '7',
-            tessedit_char_whitelist: whitelist || ''
-        });
-        const result = await worker.recognize(canvas);
-        return result.data.text.trim();
-    }
-
-    async function detectCharsetFromFrame(frame, gridInfo) {
-        if (!gridInfo.gridCells || gridInfo.gridCells.length < 10) return 'alphanum';
-
-        const cols = gridInfo.cols || 10;
-        const crop = getRowCrop(frame, gridInfo, 0);
-        const canvas = cropRegion(frame, crop.x, crop.y, crop.w, crop.h);
-        if (!canvas) return 'alphanum';
-
-        // Try row 0 with eng (no whitelist — let it read whatever it can)
-        const engText = await ocrRowWithLang(canvas, 'eng', '');
-        const engCodes = parseRowCodes(engText, cols);
-        const engValid = engCodes.filter(c => c.length === CODE_LEN).length;
-
-        // Try row 0 with ell (Greek)
-        const ellCanvas = cropRegion(frame, crop.x, crop.y, crop.w, crop.h);
-        const ellText = await ocrRowWithLang(ellCanvas, 'ell', '');
-        const ellCodes = parseRowCodes(ellText, cols);
-        const ellValid = ellCodes.filter(c => c.length === CODE_LEN).length;
-
-        // Also try a second row for more confidence
-        let engValid2 = 0, ellValid2 = 0;
-        const rows = gridInfo.rows || 8;
-        if (rows > 2) {
-            const crop2 = getRowCrop(frame, gridInfo, 2);
-            const canvas2a = cropRegion(frame, crop2.x, crop2.y, crop2.w, crop2.h);
-            const canvas2b = cropRegion(frame, crop2.x, crop2.y, crop2.w, crop2.h);
-            if (canvas2a && canvas2b) {
-                const engText2 = await ocrRowWithLang(canvas2a, 'eng', '');
-                engValid2 = parseRowCodes(engText2, cols).filter(c => c.length === CODE_LEN).length;
-                const ellText2 = await ocrRowWithLang(canvas2b, 'ell', '');
-                ellValid2 = parseRowCodes(ellText2, cols).filter(c => c.length === CODE_LEN).length;
-            }
-        }
-
-        const engTotal = engValid + engValid2;
-        const ellTotal = ellValid + ellValid2;
-
-        if (ellTotal > engTotal) return 'greek';
-
-        if (engTotal >= cols) {
-            const allText = engText;
-            let digits = 0, letters = 0;
-            for (const ch of allText) {
-                if (/[0-9]/.test(ch)) digits++;
-                else if (/[A-Za-z]/.test(ch)) letters++;
-            }
-            if (digits > 0 && letters === 0) return 'numeric';
-            if (letters > 0 && digits === 0) return 'alpha';
-            if (digits > 0 && letters > 0) return 'alphanum';
-            return 'alpha';
-        }
-
-        // Neither produced good results — try binarized
-        const binCanvas = binarize(cropRegion(frame, crop.x, crop.y, crop.w, crop.h));
-        if (binCanvas) {
-            const binEngText = await ocrRowWithLang(binCanvas, 'eng', '');
-            const binEngValid = parseRowCodes(binEngText, cols).filter(c => c.length === CODE_LEN).length;
-
-            const binEllCanvas = binarize(cropRegion(frame, crop.x, crop.y, crop.w, crop.h));
-            if (binEllCanvas) {
-                const binEllText = await ocrRowWithLang(binEllCanvas, 'ell', '');
-                const binEllValid = parseRowCodes(binEllText, cols).filter(c => c.length === CODE_LEN).length;
-                if (binEllValid > binEngValid) return 'greek';
-            }
-
-            if (binEngValid >= cols) {
-                let d = 0, l = 0;
-                for (const ch of binEngText) {
-                    if (/[0-9]/.test(ch)) d++;
-                    else if (/[A-Za-z]/.test(ch)) l++;
-                }
-                if (d > l) return 'numeric';
-                return 'alpha';
-            }
-        }
-
-        return ellTotal > 0 ? 'greek' : 'alphanum';
-    }
-
     function parseRowCodes(text, expectedCount) {
         const cleaned = text.replace(CODE_CHARS_RE, '');
 
@@ -286,7 +217,6 @@ const OCR = (() => {
             if (codes.length >= 3 && codes.length <= 5) return codes.slice(0, 4);
         }
 
-        // Digit-specific fallback for numeric mode
         for (const line of lines) {
             const digits = line.replace(/[^0-9]/g, '');
             if (digits.length >= 6 && digits.length <= 10) {
@@ -317,9 +247,6 @@ const OCR = (() => {
         const w = Math.min(frame.width - x, (tLast.x + tLast.w) - t0.x + pad * 2);
         const h = Math.min(frame.height - y, t0.h + pad * 2);
 
-        const cs = detectedCharset ? CHARSETS[detectedCharset] : null;
-        if (cs) await switchLang(cs.lang);
-
         await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
 
         const canvas = cropRegion(frame, x, y, w, h);
@@ -329,11 +256,7 @@ const OCR = (() => {
 
         if (codes && codes.length >= 2) return codes;
 
-        // Fallback: tighter crop (skip header text), PSM 7
-        await worker.setParameters({
-            tessedit_pageseg_mode: '7',
-            tessedit_char_whitelist: cs ? cs.whitelist : ''
-        });
+        await worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '' });
         const tightY = t0.y + Math.floor(t0.h * 0.35);
         const tightH = Math.floor(t0.h * 0.65) + pad;
         const tightCanvas = cropRegion(frame, x, tightY, w, tightH);
@@ -344,19 +267,16 @@ const OCR = (() => {
         return codes2 && codes2.length >= 2 ? codes2 : null;
     }
 
-    async function ocrGrid(frame, gridInfo) {
+    async function ocrGrid(frame, gridInfo, whitelist) {
         if (!gridInfo.gridCells || gridInfo.gridCells.length < 30) return null;
 
         const cols = gridInfo.cols || 10;
         const rows = gridInfo.rows || 8;
         const allCodes = [];
 
-        const cs = detectedCharset ? CHARSETS[detectedCharset] : CHARSETS.alphanum;
-
-        await switchLang(cs.lang);
         await worker.setParameters({
             tessedit_pageseg_mode: '7',
-            tessedit_char_whitelist: cs.whitelist
+            tessedit_char_whitelist: whitelist || ''
         });
 
         for (let r = 0; r < rows; r++) {
@@ -391,27 +311,17 @@ const OCR = (() => {
         return allCodes.length === rows * cols ? allCodes : null;
     }
 
-    function getDetectedCharset() {
-        return detectedCharset;
-    }
-
-    function setDetectedCharset(cs) {
-        detectedCharset = cs;
-    }
-
     async function terminate() {
         if (worker) {
             await worker.terminate();
             worker = null;
             initialized = false;
-            currentLang = '';
-            detectedCharset = null;
         }
     }
 
     return {
-        init, switchLang, ocrTarget, ocrGrid, terminate,
-        detectCharsetFromFrame, getDetectedCharset, setDetectedCharset,
-        cropRegion, binarize, parseRowCodes, parseTargetCodes
+        init, ocrTarget, ocrGrid, terminate,
+        cropRegion, binarize, parseRowCodes, parseTargetCodes,
+        normalizeText, normalizeCodes, guessWhitelist
     };
 })();

@@ -190,73 +190,57 @@ const App = (() => {
         }
     }
 
-    async function tryOCRPipeline(frame, charset) {
-        OCR.setDetectedCharset(charset);
-
-        setState('reading', `Reading target (${charset})...`);
-        const targetCodes = await OCR.ocrTarget(frame, gridInfo);
-        if (!targetCodes) return null;
-
-        setState('reading', `Reading grid (${charset})...`);
-        const gridCodes = await OCR.ocrGrid(frame, gridInfo);
-        if (!gridCodes) return null;
-
-        const match = Matcher.findMatchByText(targetCodes, gridCodes);
-        return { targetCodes, gridCodes, match, charset };
-    }
-
     async function startOCR(frame) {
         setState('reading', 'Loading OCR...');
-        log('Initializing Tesseract...');
+        log('Initializing Tesseract (eng+ell)...');
 
         try {
-            await OCR.init('eng');
-            log('Detecting character set...');
+            await OCR.init();
 
-            setState('reading', 'Detecting charset...');
-            const charset = await OCR.detectCharsetFromFrame(frame, gridInfo);
-            log('Detected: ' + charset);
-
-            // Try detected charset first
-            let result = await tryOCRPipeline(frame, charset);
-
-            // If no match, try fallback charsets
-            if (!result || !result.match) {
-                const fallbacks = ['numeric', 'alpha', 'greek', 'alphanum'].filter(c => c !== charset);
-                const firstResult = result;
-
-                for (const fb of fallbacks) {
-                    log(`No match with ${result ? result.charset : charset}, trying ${fb}...`);
-                    result = await tryOCRPipeline(frame, fb);
-                    if (result && result.match) break;
-                }
-
-                // If still no match, show debug from best attempt
-                if (!result || !result.match) {
-                    const best = result || firstResult;
-                    if (best && best.targetCodes && best.gridCodes) {
-                        let dbg = `No match (tried all charsets)\nT: [${best.targetCodes.join(',')}]`;
-                        const gc = gridInfo.cols || 10;
-                        for (let r = 0; r < Math.ceil(best.gridCodes.length / gc); r++) {
-                            dbg += `\nR${r+1}: ${best.gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
-                        }
-                        log(dbg);
-                    } else {
-                        log('OCR failed for all charsets - retrying');
-                    }
-                    setState('detecting');
-                    setTimeout(runDetection, 2000);
-                    return;
-                }
+            setState('reading', 'Reading target...');
+            const rawTarget = await OCR.ocrTarget(frame, gridInfo);
+            if (!rawTarget) {
+                log('Failed to read target codes');
+                setState('detecting');
+                setTimeout(runDetection, 2000);
+                return;
             }
 
-            // Match found
-            gridInfo.targetCodes = result.targetCodes;
-            gridInfo.gridCodes = result.gridCodes;
-            lastMatch = result.match;
+            const whitelist = OCR.guessWhitelist(rawTarget);
+            log(`Target: [${rawTarget.join(', ')}] wl:${whitelist.length}`);
+
+            setState('reading', 'Reading grid...');
+            const rawGrid = await OCR.ocrGrid(frame, gridInfo, whitelist);
+            if (!rawGrid) {
+                log('Failed to read grid codes');
+                setState('detecting');
+                setTimeout(runDetection, 2000);
+                return;
+            }
+
+            const targetCodes = OCR.normalizeCodes(rawTarget);
+            const gridCodes = OCR.normalizeCodes(rawGrid);
+
+            const match = Matcher.findMatchByText(targetCodes, gridCodes);
+
+            if (!match) {
+                let dbg = `No match\nT: [${targetCodes.join(',')}]`;
+                const gc = gridInfo.cols || 10;
+                for (let r = 0; r < Math.ceil(gridCodes.length / gc); r++) {
+                    dbg += `\nR${r+1}: ${gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                }
+                log(dbg);
+                setState('detecting');
+                setTimeout(runDetection, 2000);
+                return;
+            }
+
+            gridInfo.targetCodes = targetCodes;
+            gridInfo.gridCodes = gridCodes;
+            lastMatch = match;
             setState('tracking');
-            drawResult(result.match);
-            log(`FOUND R${result.match.row}C${result.match.col}\nCharset: ${result.charset}\nTarget: [${result.targetCodes.join(', ')}]\nConf: ${(result.match.confidence * 100).toFixed(0)}%`);
+            drawResult(match);
+            log(`FOUND R${match.row}C${match.col}\nTarget: [${targetCodes.join(', ')}]\nConf: ${(match.confidence * 100).toFixed(0)}%`);
 
             ocrIntervalId = setInterval(() => refreshOCR(), 3000);
         } catch (err) {
@@ -281,9 +265,10 @@ const App = (() => {
 
             gridInfo = result;
 
-            const gridCodes = await OCR.ocrGrid(frame, gridInfo);
-            if (!gridCodes) return;
+            const rawGrid = await OCR.ocrGrid(frame, gridInfo);
+            if (!rawGrid) return;
 
+            const gridCodes = OCR.normalizeCodes(rawGrid);
             gridInfo.gridCodes = gridCodes;
 
             const match = Matcher.findMatchByText(gridInfo.targetCodes, gridCodes);

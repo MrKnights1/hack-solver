@@ -1,15 +1,8 @@
 const App = (() => {
     let state = 'idle';
+    let animFrameId = null;
     let gridInfo = null;
     let targetTemplates = null;
-    let matchingLoopId = null;
-    let lastMatchPosition = -1;
-    let consecutiveFailures = 0;
-    let detectionTimeoutId = null;
-
-    const MATCH_INTERVAL_MS = 200;
-    const MAX_CONSECUTIVE_FAILURES = 10;
-    const MIN_CONFIDENCE = 0.15;
 
     // Temporal smoothing: vote on position across recent frames
     const VOTE_WINDOW = 10;
@@ -45,7 +38,8 @@ const App = (() => {
             await Camera.start();
             btnStart.classList.add('hidden');
             btnStop.classList.remove('hidden');
-            resetMatchingState();
+            recentPositions.length = 0;
+            stablePosition = -1;
             setState('detecting');
             runDetection();
         } catch (err) {
@@ -54,24 +48,17 @@ const App = (() => {
     }
 
     function handleStop() {
-        stopMatchingLoop();
-        clearTimeout(detectionTimeoutId);
+        cancelAnimationFrame(animFrameId);
         Camera.stop();
         gridInfo = null;
         targetTemplates = null;
-        resetMatchingState();
+        recentPositions.length = 0;
+        stablePosition = -1;
         btnStop.classList.add('hidden');
         btnStart.classList.remove('hidden');
         positionEl.style.display = 'none';
         clearOverlay();
         setState('idle');
-    }
-
-    function resetMatchingState() {
-        recentPositions.length = 0;
-        stablePosition = -1;
-        lastMatchPosition = -1;
-        consecutiveFailures = 0;
     }
 
     function setState(newState, message) {
@@ -136,7 +123,7 @@ const App = (() => {
 
         const frame = Camera.captureFrame();
         if (!frame) {
-            detectionTimeoutId = setTimeout(runDetection, 200);
+            setTimeout(runDetection, 200);
             return;
         }
 
@@ -149,84 +136,48 @@ const App = (() => {
                 frame, [], result.targetCells
             );
             targetTemplates = targetCells;
-            startMatchingLoop();
+            setState('matching');
+            animFrameId = requestAnimationFrame(matchLoop);
         } else {
-            detectionTimeoutId = setTimeout(runDetection, 500);
+            setTimeout(runDetection, 500);
         }
     }
 
     /**
-     * Start the real-time matching loop.
+     * Phase 2: Continuous pixel matching loop.
+     * Uses static grid cell positions from initial detection.
+     * Grid content shuffles every 1.5s but cell positions don't move.
+     * Targets are static so templates extracted once are reused.
      */
-    function startMatchingLoop() {
-        setState('matching');
-        consecutiveFailures = 0;
-        recentPositions.length = 0;
-        stablePosition = -1;
-        matchingLoopId = setInterval(runMatchingFrame, MATCH_INTERVAL_MS);
-    }
-
-    function stopMatchingLoop() {
-        if (matchingLoopId !== null) {
-            clearInterval(matchingLoopId);
-            matchingLoopId = null;
-        }
-    }
-
-    /**
-     * Single matching frame (~150ms budget):
-     *   capture → re-detect → extract 80 cells → pixel match → draw
-     *
-     * Re-detects grid each frame to handle camera movement.
-     * Falls back to detecting state after consecutive failures.
-     */
-    function runMatchingFrame() {
+    function matchLoop() {
         if (state !== 'matching') return;
 
         const frame = Camera.captureFrame();
-        if (!frame) return;
+        if (frame) {
+            const { gridCells } = Processor.extractAllCells(
+                frame, gridInfo.gridCells, []
+            );
 
-        const detection = Detector.detect(frame);
+            const match = Matcher.findMatch(targetTemplates, gridCells);
 
-        if (!detection || detection.gridCells.length < 30) {
-            consecutiveFailures++;
-            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                stopMatchingLoop();
-                clearOverlay();
-                positionEl.style.display = 'none';
-                resetMatchingState();
-                setState('detecting');
-                runDetection();
-            }
-            return;
-        }
+            if (match) {
+                const stablePos = getMostVotedPosition(match);
 
-        consecutiveFailures = 0;
-        gridInfo = detection;
-
-        const { gridCells } = Processor.extractAllCells(
-            frame, detection.gridCells, []
-        );
-
-        const match = Matcher.findMatch(targetTemplates, gridCells);
-
-        if (match && match.confidence > MIN_CONFIDENCE) {
-            const stablePos = getMostVotedPosition(match);
-
-            if (stablePos >= 0 && stablePos !== lastMatchPosition) {
-                const cols = match.cols || 10;
-                const displayMatch = {
-                    position: stablePos,
-                    row: Math.floor(stablePos / cols) + 1,
-                    col: (stablePos % cols) + 1,
-                    cols,
-                    confidence: match.confidence,
-                    score: match.score
-                };
-                lastMatchPosition = stablePos;
-                drawResult(displayMatch);
+                if (stablePos >= 0) {
+                    const cols = match.cols || 10;
+                    drawResult({
+                        position: stablePos,
+                        row: Math.floor(stablePos / cols) + 1,
+                        col: (stablePos % cols) + 1,
+                        cols,
+                        confidence: match.confidence,
+                        score: match.score
+                    });
+                }
             }
         }
+
+        animFrameId = requestAnimationFrame(matchLoop);
     }
 
     /**

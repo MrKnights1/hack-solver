@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hack-solver-v13';
+const CACHE_NAME = 'hack-solver-v14';
 const ASSETS = [
     './',
     './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
     './camera.js',
     './detector.js',
     './processor.js',
+    './ocr.js',
     './matcher.js',
     './manifest.json'
 ];

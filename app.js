@@ -11,6 +11,7 @@ const App = (() => {
     const btnStop = document.getElementById('btnStop');
 
     let cameraRunning = false;
+    let ocrReady = false;
 
     function init() {
         Camera.init(videoEl);
@@ -43,6 +44,19 @@ const App = (() => {
 
         btnStart.textContent = 'SCAN';
         btnStop.classList.remove('hidden');
+
+        if (!ocrReady) {
+            setStatus('detecting', 'Loading OCR...');
+            try {
+                await OCR.init();
+                ocrReady = true;
+            } catch (err) {
+                setStatus('error', 'OCR failed to load');
+                debug(err.message);
+                return;
+            }
+        }
+
         scan();
     }
 
@@ -62,56 +76,88 @@ const App = (() => {
         statusText.textContent = message;
     }
 
-    function scan() {
+    async function scan() {
         setStatus('detecting', 'Scanning...');
         clearOverlay();
         positionEl.style.display = 'none';
+        btnStart.disabled = true;
 
-        const frame = Camera.captureFrame();
-        if (!frame) {
-            setStatus('error', 'No frame - try again');
-            debug('captureFrame returned null');
-            return;
+        try {
+            const frame = Camera.captureFrame();
+            if (!frame) {
+                setStatus('error', 'No frame - tap SCAN');
+                debug('captureFrame returned null');
+                return;
+            }
+
+            // Step 1: Detect grid structure
+            const detection = Detector.detect(frame);
+            if (!detection) {
+                setStatus('error', 'Grid not found - tap SCAN');
+                debug('Detector returned null');
+                return;
+            }
+
+            const gc = detection.gridCells.length;
+            const tc = detection.targetCells ? detection.targetCells.length : 0;
+            debug(`Detected: ${gc} grid, ${tc} target`);
+
+            if (gc < 30 || tc < 3) {
+                setStatus('error', `Need 30+ grid & 3+ target, got ${gc}/${tc}`);
+                return;
+            }
+
+            // Step 2: OCR target codes
+            setStatus('detecting', 'Reading target...');
+            const targetCodes = await OCR.ocrTarget(frame, detection);
+            if (!targetCodes || targetCodes.length < 2) {
+                setStatus('error', 'Could not read target codes');
+                debug(`Target OCR failed`);
+                return;
+            }
+            debug(`Target: ${targetCodes.join(' ')}`);
+
+            // Step 3: Guess whitelist from target codes
+            const whitelist = OCR.guessWhitelist(targetCodes);
+
+            // Step 4: OCR grid (block mode for speed)
+            setStatus('detecting', 'Reading grid...');
+            let gridCodes = await OCR.ocrGridBlock(frame, detection, whitelist);
+
+            // Fallback to per-row OCR if block failed
+            if (!gridCodes) {
+                setStatus('detecting', 'Reading grid (row by row)...');
+                gridCodes = await OCR.ocrGrid(frame, detection, whitelist);
+            }
+
+            if (!gridCodes) {
+                setStatus('error', 'Could not read grid');
+                debug(`Target: ${targetCodes.join(' ')} | Grid OCR failed`);
+                return;
+            }
+
+            // Step 5: Normalize and text match
+            const normTarget = OCR.normalizeCodes(targetCodes);
+            const normGrid = OCR.normalizeCodes(gridCodes);
+
+            const match = Matcher.findMatchByText(normTarget, normGrid);
+            if (!match) {
+                setStatus('error', 'No match in grid');
+                debug(`Target: ${normTarget.join(' ')} | Grid: ${normGrid.length} codes, no match`);
+                return;
+            }
+
+            // Step 6: Draw result
+            const cols = match.cols || 10;
+            debug(`Target: ${normTarget.join(' ')} → R${match.row}C${match.col} (${Math.round(match.confidence * 100)}%)`);
+
+            drawResult(detection, match.position, normTarget.length);
+            positionEl.textContent = `R${match.row} C${match.col}`;
+            positionEl.style.display = 'block';
+            setStatus('tracking', `Found: Row ${match.row}, Col ${match.col}`);
+        } finally {
+            btnStart.disabled = false;
         }
-        debug(`Frame: ${frame.width}x${frame.height}`);
-
-        const detection = Detector.detect(frame);
-        if (!detection) {
-            setStatus('error', 'Grid not found - tap SCAN');
-            debug('Detector returned null');
-            return;
-        }
-
-        const gc = detection.gridCells.length;
-        const tc = detection.targetCells ? detection.targetCells.length : 0;
-        debug(`Detected: ${gc} grid, ${tc} target`);
-
-        if (gc < 30 || tc < 3) {
-            setStatus('error', `Need 30+ grid & 3+ target, got ${gc}/${tc}`);
-            return;
-        }
-
-        const { gridCells, targetCells } = Processor.extractAllCells(
-            frame, detection.gridCells, detection.targetCells
-        );
-
-        const match = Matcher.findMatch(targetCells, gridCells);
-        if (!match) {
-            setStatus('error', 'No match found - tap SCAN');
-            debug(`Extracted ${gridCells.length} grid, ${targetCells.length} target - no match`);
-            return;
-        }
-
-        const cols = match.cols || 10;
-        const row = Math.floor(match.position / cols) + 1;
-        const col = (match.position % cols) + 1;
-
-        debug(`pos=${match.position} R${row}C${col} score=${match.score.toFixed(3)} conf=${(match.confidence * 100).toFixed(1)}%`);
-
-        drawResult(detection, match.position, targetCells.length);
-        positionEl.textContent = `R${row} C${col}  (${Math.round(match.confidence * 100)}%)`;
-        positionEl.style.display = 'block';
-        setStatus('tracking', `Found: Row ${row}, Col ${col}`);
     }
 
     function drawResult(detection, position, numTargets) {

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Hacking Device Solver</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a0a0a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <video id="camera" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+
+        <div id="status">
+            <span id="statusDot"></span>
+            <span id="statusText">Tap START to begin</span>
+        </div>
+
+        <div id="position"></div>
+
+        <div id="controls">
+            <button id="btnStart">START</button>
+            <button id="btnStop" class="hidden">STOP</button>
+        </div>
+    </div>
+
+    <script src="camera.js"></script>
+    <script src="detector.js"></script>
+    <script src="processor.js"></script>
+    <script src="matcher.js"></script>
+    <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(() => {});
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+    "name": "Hacking Device Solver",
+    "short_name": "HackSolver",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#0a0a0a",
+    "theme_color": "#0a0a0a"
+}

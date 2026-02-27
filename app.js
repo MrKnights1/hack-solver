@@ -1,13 +1,9 @@
 const App = (() => {
     let state = 'idle';
-    let animFrameId = null;
     let gridInfo = null;
     let lastMatch = null;
     let detectAttempts = 0;
-
-    const VOTE_WINDOW = 10;
-    const recentPositions = [];
-    let stablePosition = -1;
+    let ocrIntervalId = null;
 
     const videoEl = document.getElementById('camera');
     const overlayEl = document.getElementById('overlay');
@@ -46,8 +42,6 @@ const App = (() => {
             btnStart.classList.add('hidden');
             btnStop.classList.remove('hidden');
             btnCapture.classList.remove('hidden');
-            recentPositions.length = 0;
-            stablePosition = -1;
             detectAttempts = 0;
             setState('detecting');
             runDetection();
@@ -58,12 +52,14 @@ const App = (() => {
     }
 
     function handleStop() {
-        cancelAnimationFrame(animFrameId);
+        if (ocrIntervalId) {
+            clearInterval(ocrIntervalId);
+            ocrIntervalId = null;
+        }
         Camera.stop();
+        OCR.terminate();
         gridInfo = null;
         lastMatch = null;
-        recentPositions.length = 0;
-        stablePosition = -1;
         btnStop.classList.add('hidden');
         btnCapture.classList.add('hidden');
         btnStart.classList.remove('hidden');
@@ -73,10 +69,6 @@ const App = (() => {
         setState('idle');
     }
 
-    /**
-     * Capture current frame, run detection with debug info,
-     * draw debug overlay, and download annotated frame.
-     */
     function handleCapture() {
         const frame = Camera.captureFrame();
         if (!frame) {
@@ -104,9 +96,8 @@ const App = (() => {
         }
 
         log(msg);
-        drawDebugCells(result, frame);
+        drawDebugCells(result);
 
-        // Download annotated frame
         const canvas = document.createElement('canvas');
         canvas.width = frame.width;
         canvas.height = frame.height;
@@ -150,6 +141,10 @@ const App = (() => {
                 statusDot.className = 'detecting';
                 statusText.textContent = 'Detecting grid...';
                 break;
+            case 'reading':
+                statusDot.className = 'detecting';
+                statusText.textContent = message || 'Reading codes...';
+                break;
             case 'tracking':
                 statusDot.className = 'tracking';
                 statusText.textContent = 'Tracking';
@@ -161,36 +156,6 @@ const App = (() => {
         }
     }
 
-    function getMostVotedPosition(match) {
-        recentPositions.push(match.position);
-        if (recentPositions.length > VOTE_WINDOW) {
-            recentPositions.shift();
-        }
-
-        const votes = {};
-        for (const pos of recentPositions) {
-            votes[pos] = (votes[pos] || 0) + 1;
-        }
-
-        let bestPos = match.position;
-        let bestVotes = 0;
-        for (const [pos, count] of Object.entries(votes)) {
-            if (count > bestVotes) {
-                bestVotes = count;
-                bestPos = parseInt(pos);
-            }
-        }
-
-        if (bestVotes >= 3) {
-            stablePosition = bestPos;
-        }
-
-        return stablePosition;
-    }
-
-    /**
-     * Phase 1: Detect the grid structure.
-     */
     function runDetection() {
         if (state !== 'detecting') return;
 
@@ -219,63 +184,94 @@ const App = (() => {
 
         if (result && result.gridCells.length >= 30 && result.targetCells && result.targetCells.length >= 3) {
             gridInfo = result;
-            setState('tracking');
-            const { targetCells } = Processor.extractAllCells(
-                frame, [], result.targetCells
-            );
-            gridInfo.targetImages = targetCells;
-            log(dbg + ' -> TRACKING');
-            animFrameId = requestAnimationFrame(liveMatchLoop);
+            startOCR(frame);
         } else {
             setTimeout(runDetection, 500);
         }
     }
 
-    /**
-     * Phase 2: Live matching loop.
-     */
-    function liveMatchLoop() {
+    async function startOCR(frame) {
+        setState('reading', 'Loading OCR engine...');
+
+        try {
+            await OCR.init('eng');
+            await OCR.setWhitelist('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz');
+
+            setState('reading', 'Reading target...');
+            const targetCodes = await OCR.ocrTarget(frame, gridInfo);
+
+            if (!targetCodes) {
+                log('OCR: Could not read target codes');
+                setState('detecting');
+                setTimeout(runDetection, 1000);
+                return;
+            }
+
+            log(`Target: ${targetCodes.join(' ')}`);
+            gridInfo.targetCodes = targetCodes;
+
+            setState('reading', 'Reading grid...');
+            const gridCodes = await OCR.ocrGrid(frame, gridInfo);
+
+            if (!gridCodes) {
+                log('OCR: Could not read grid codes');
+                setState('detecting');
+                setTimeout(runDetection, 1000);
+                return;
+            }
+
+            gridInfo.gridCodes = gridCodes;
+            log(`Target: ${targetCodes.join(' ')}\nGrid: ${gridCodes.length} codes read`);
+
+            const match = Matcher.findMatchByText(targetCodes, gridCodes);
+
+            if (match) {
+                lastMatch = match;
+                setState('tracking');
+                drawResult(match);
+                log(`FOUND at R${match.row} C${match.col}\nTarget: ${targetCodes.join(' ')}\nConfidence: ${(match.confidence * 100).toFixed(0)}%`);
+
+                ocrIntervalId = setInterval(() => refreshOCR(), 3000);
+            } else {
+                log(`No match found\nTarget: ${targetCodes.join(' ')}\nGrid sample: ${gridCodes.slice(0, 10).join(' ')}`);
+                setState('detecting');
+                setTimeout(runDetection, 2000);
+            }
+        } catch (err) {
+            log('OCR error: ' + err.message);
+            setState('error', 'OCR failed');
+        }
+    }
+
+    async function refreshOCR() {
         if (state !== 'tracking') return;
 
         const frame = Camera.captureFrame();
-        if (frame) {
-            const { gridCells } = Processor.extractAllCells(
-                frame, gridInfo.gridCells, []
-            );
+        if (!frame) return;
 
-            const { targetCells: freshTargets } = Processor.extractAllCells(
-                frame, [], gridInfo.targetCells
-            );
+        try {
+            const result = Detector.detect(frame);
+            if (!result || result.gridCells.length < 30) return;
 
-            const targets = freshTargets.length >= 3 ? freshTargets : gridInfo.targetImages;
-            const match = Matcher.findMatch(targets, gridCells);
+            gridInfo = result;
 
+            const gridCodes = await OCR.ocrGrid(frame, gridInfo);
+            if (!gridCodes) return;
+
+            gridInfo.gridCodes = gridCodes;
+
+            const match = Matcher.findMatchByText(gridInfo.targetCodes, gridCodes);
             if (match) {
-                const stablePos = getMostVotedPosition(match);
-
-                if (stablePos >= 0) {
-                    const cols = match.cols || 10;
-                    const displayMatch = {
-                        position: stablePos,
-                        row: Math.floor(stablePos / cols) + 1,
-                        col: (stablePos % cols) + 1,
-                        cols,
-                        confidence: match.confidence,
-                        score: match.score
-                    };
-                    lastMatch = displayMatch;
-                    drawResult(displayMatch);
-                }
+                lastMatch = match;
+                drawResult(match);
+                log(`R${match.row} C${match.col} | ${gridInfo.targetCodes.join(' ')}`);
             }
+        } catch (_) {
+            // Silently retry next interval
         }
-
-        animFrameId = requestAnimationFrame(liveMatchLoop);
     }
 
-    /**
-     * Draw debug overlay showing detected cell rectangles.
-     */
-    function drawDebugCells(result, frame) {
+    function drawDebugCells(result) {
         clearOverlay();
         if (!result) return;
 

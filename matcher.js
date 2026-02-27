@@ -128,5 +128,88 @@ const Matcher = (() => {
         return 10;
     }
 
-    return { findMatch, ncc, hammingDist };
+    /**
+     * Find match by comparing OCR text strings.
+     * targetCodes: array of 4 strings (e.g., ["58","38","69","61"])
+     * gridCodes: flat array of 80 strings (row-major order)
+     */
+    function findMatchByText(targetCodes, gridCodes) {
+        if (!targetCodes || !gridCodes) return null;
+        if (targetCodes.length < 2 || gridCodes.length < 4) return null;
+
+        const numCodes = gridCodes.length;
+        const numTargets = targetCodes.length;
+        const cols = estimateColumns(numCodes);
+
+        for (let pos = 0; pos < numCodes; pos++) {
+            let match = true;
+            for (let t = 0; t < numTargets; t++) {
+                const gridIdx = (pos + t) % numCodes;
+                if (gridCodes[gridIdx] !== targetCodes[t]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return {
+                    position: pos,
+                    row: Math.floor(pos / cols) + 1,
+                    col: (pos % cols) + 1,
+                    cols,
+                    score: 0,
+                    confidence: 1
+                };
+            }
+        }
+
+        // No exact match — try fuzzy matching
+        // Handles: character substitutions, partial codes (OCR drops thin chars like 1, 9)
+        let bestPos = -1;
+        let bestScore = Infinity;
+        let secondBest = Infinity;
+        for (let pos = 0; pos < numCodes; pos++) {
+            let totalScore = 0;
+            for (let t = 0; t < numTargets; t++) {
+                const gridIdx = (pos + t) % numCodes;
+                const a = targetCodes[t];
+                const b = gridCodes[gridIdx];
+                if (a === b) continue;
+                if (a.length === b.length) {
+                    let charDiffs = 0;
+                    for (let c = 0; c < a.length; c++) {
+                        if (a[c] !== b[c]) charDiffs++;
+                    }
+                    totalScore += charDiffs;
+                } else if (a.length < b.length && b.startsWith(a)) {
+                    totalScore += 0.5;
+                } else if (a.length > 0 && b.length > 0 && a[0] === b[0]) {
+                    totalScore += 1;
+                } else {
+                    totalScore += 2;
+                }
+            }
+            if (totalScore < bestScore) {
+                secondBest = bestScore;
+                bestScore = totalScore;
+                bestPos = pos;
+            } else if (totalScore < secondBest) {
+                secondBest = totalScore;
+            }
+        }
+
+        if (bestPos >= 0 && bestScore <= 3 && (secondBest - bestScore) >= 0.5) {
+            return {
+                position: bestPos,
+                row: Math.floor(bestPos / cols) + 1,
+                col: (bestPos % cols) + 1,
+                cols,
+                score: bestScore,
+                confidence: Math.max(0, Math.min(1, (secondBest - bestScore) / numTargets))
+            };
+        }
+
+        return null;
+    }
+
+    return { findMatch, findMatchByText, ncc, hammingDist };
 })();

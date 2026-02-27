@@ -678,5 +678,58 @@ const Detector = (() => {
         return { cProj, peaks };
     }
 
-    return { detect, toGrayscale, adaptiveThreshold, debugColProjection };
+    /**
+     * Debug detection: returns a string with diagnostic info.
+     */
+    function debugDetect(imageData) {
+        const gray = toGrayscale(imageData);
+        const { width, height } = gray;
+        const lines = [];
+
+        // Try binary path
+        const blockSize = Math.floor(width / 30) | 1;
+        const binary = adaptiveThreshold(gray, blockSize, 8);
+        const rProj = rowProjection(binary);
+        const rawBands = findPeaks(rProj, 0.02).filter(b => (b.end - b.start) >= 3);
+        lines.push(`BIN: ${rawBands.length} row bands`);
+
+        const merged = mergeBands(rawBands);
+        if (merged.length !== rawBands.length) {
+            lines.push(`BIN merged: ${merged.length} bands`);
+        }
+
+        const binResult = findGridByProjection(binary);
+        if (binResult) {
+            lines.push(`BIN grid: ${binResult.gridCells.length}c tgt:${binResult.targetCells ? binResult.targetCells.length : 0}`);
+        } else {
+            lines.push('BIN: no grid');
+        }
+
+        // Try grayscale path
+        const rowMean = new Float64Array(height);
+        for (let y = 0; y < height; y++) {
+            let sum = 0;
+            for (let x = 0; x < width; x++) sum += gray.data[y * width + x];
+            rowMean[y] = sum / width;
+        }
+        const rowDet = detrendedProjection(rowMean, 30);
+        const gsBands = findPeaks(rowDet, 3).filter(b => (b.end - b.start) >= 3);
+        lines.push(`GS: ${gsBands.length} row bands`);
+
+        const gsMerged = mergeBands(gsBands);
+        if (gsMerged.length !== gsBands.length) {
+            lines.push(`GS merged: ${gsMerged.length} bands`);
+        }
+
+        const gsResult = findGridByGrayscaleProjection(gray);
+        if (gsResult) {
+            lines.push(`GS grid: ${gsResult.gridCells.length}c tgt:${gsResult.targetCells ? gsResult.targetCells.length : 0}`);
+        } else {
+            lines.push('GS: no grid');
+        }
+
+        return lines.join('\n');
+    }
+
+    return { detect, debugDetect, toGrayscale, adaptiveThreshold, debugColProjection };
 })();

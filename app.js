@@ -3,26 +3,28 @@ const App = (() => {
     let animFrameId = null;
     let gridInfo = null;
     let lastMatch = null;
+    let detectAttempts = 0;
 
-    // Temporal smoothing: vote on position across recent frames
     const VOTE_WINDOW = 10;
     const recentPositions = [];
     let stablePosition = -1;
 
-    // DOM
     const videoEl = document.getElementById('camera');
     const overlayEl = document.getElementById('overlay');
     const overlayCtx = overlayEl.getContext('2d');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const positionEl = document.getElementById('position');
+    const debugEl = document.getElementById('debug');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
+    const btnCapture = document.getElementById('btnCapture');
 
     function init() {
         Camera.init(videoEl);
         btnStart.addEventListener('click', handleStart);
         btnStop.addEventListener('click', handleStop);
+        btnCapture.addEventListener('click', handleCapture);
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
     }
@@ -33,17 +35,25 @@ const App = (() => {
         overlayCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
     }
 
+    function log(msg) {
+        debugEl.style.display = 'block';
+        debugEl.textContent = msg;
+    }
+
     async function handleStart() {
         try {
             await Camera.start();
             btnStart.classList.add('hidden');
             btnStop.classList.remove('hidden');
+            btnCapture.classList.remove('hidden');
             recentPositions.length = 0;
             stablePosition = -1;
+            detectAttempts = 0;
             setState('detecting');
             runDetection();
         } catch (err) {
             setState('error', 'Camera access denied');
+            log('Camera error: ' + err.message);
         }
     }
 
@@ -55,10 +65,77 @@ const App = (() => {
         recentPositions.length = 0;
         stablePosition = -1;
         btnStop.classList.add('hidden');
+        btnCapture.classList.add('hidden');
         btnStart.classList.remove('hidden');
         positionEl.style.display = 'none';
+        debugEl.style.display = 'none';
         clearOverlay();
         setState('idle');
+    }
+
+    /**
+     * Capture current frame, run detection with debug info,
+     * draw debug overlay, and download annotated frame.
+     */
+    function handleCapture() {
+        const frame = Camera.captureFrame();
+        if (!frame) {
+            log('No frame to capture');
+            return;
+        }
+
+        const result = Detector.detect(frame);
+        const debugInfo = Detector.debugDetect ? Detector.debugDetect(frame) : '';
+
+        let msg = `Frame: ${frame.width}x${frame.height}\n`;
+        msg += debugInfo + '\n';
+
+        if (result) {
+            msg += `Grid: ${result.gridCells.length} cells\n`;
+            msg += `Target: ${result.targetCells ? result.targetCells.length : 0} cells\n`;
+            if (result.gridCells.length > 0) {
+                const c0 = result.gridCells[0];
+                const cN = result.gridCells[result.gridCells.length - 1];
+                msg += `Grid area: (${c0.x},${c0.y})-(${cN.x + cN.w},${cN.y + cN.h})\n`;
+                msg += `Cell size: ~${c0.w}x${c0.h}`;
+            }
+        } else {
+            msg += 'Detection: FAILED';
+        }
+
+        log(msg);
+        drawDebugCells(result, frame);
+
+        // Download annotated frame
+        const canvas = document.createElement('canvas');
+        canvas.width = frame.width;
+        canvas.height = frame.height;
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(frame, 0, 0);
+
+        if (result) {
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            for (const cell of result.gridCells) {
+                ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+            }
+            if (result.targetCells) {
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 3;
+                for (const cell of result.targetCells) {
+                    ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+                }
+            }
+        }
+
+        canvas.toBlob(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'hack-debug-' + Date.now() + '.png';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
     }
 
     function setState(newState, message) {
@@ -84,22 +161,17 @@ const App = (() => {
         }
     }
 
-    /**
-     * Find the most voted position in recent frames.
-     */
     function getMostVotedPosition(match) {
         recentPositions.push(match.position);
         if (recentPositions.length > VOTE_WINDOW) {
             recentPositions.shift();
         }
 
-        // Count votes for each position
         const votes = {};
         for (const pos of recentPositions) {
             votes[pos] = (votes[pos] || 0) + 1;
         }
 
-        // Find the position with the most votes
         let bestPos = match.position;
         let bestVotes = 0;
         for (const [pos, count] of Object.entries(votes)) {
@@ -109,7 +181,6 @@ const App = (() => {
             }
         }
 
-        // Need at least 3 votes for stability
         if (bestVotes >= 3) {
             stablePosition = bestPos;
         }
@@ -119,7 +190,6 @@ const App = (() => {
 
     /**
      * Phase 1: Detect the grid structure.
-     * Retries every 500ms until found.
      */
     function runDetection() {
         if (state !== 'detecting') return;
@@ -130,7 +200,22 @@ const App = (() => {
             return;
         }
 
+        detectAttempts++;
         const result = Detector.detect(frame);
+
+        let dbg = `#${detectAttempts} | ${frame.width}x${frame.height} | `;
+
+        if (result) {
+            const gc = result.gridCells.length;
+            const tc = result.targetCells ? result.targetCells.length : 0;
+            dbg += `Grid:${gc} Tgt:${tc}`;
+            if (gc < 30) dbg += ' (need >=30 grid)';
+            if (tc < 3) dbg += ' (need >=3 target)';
+        } else {
+            dbg += 'No grid found';
+        }
+
+        log(dbg);
 
         if (result && result.gridCells.length >= 30 && result.targetCells && result.targetCells.length >= 3) {
             gridInfo = result;
@@ -139,6 +224,7 @@ const App = (() => {
                 frame, [], result.targetCells
             );
             gridInfo.targetImages = targetCells;
+            log(dbg + ' -> TRACKING');
             animFrameId = requestAnimationFrame(liveMatchLoop);
         } else {
             setTimeout(runDetection, 500);
@@ -147,8 +233,6 @@ const App = (() => {
 
     /**
      * Phase 2: Live matching loop.
-     * Re-reads grid cell contents each frame and finds the match.
-     * Uses temporal voting to stabilize the result.
      */
     function liveMatchLoop() {
         if (state !== 'tracking') return;
@@ -189,8 +273,39 @@ const App = (() => {
     }
 
     /**
-     * Draw the green highlight rectangle on the overlay canvas.
+     * Draw debug overlay showing detected cell rectangles.
      */
+    function drawDebugCells(result, frame) {
+        clearOverlay();
+        if (!result) return;
+
+        const dims = Camera.getVideoDimensions();
+        if (!dims.videoWidth) return;
+
+        const scaleX = dims.displayWidth / dims.videoWidth;
+        const scaleY = dims.displayHeight / dims.videoHeight;
+
+        overlayCtx.strokeStyle = '#00ffff';
+        overlayCtx.lineWidth = 1;
+        for (const cell of result.gridCells) {
+            overlayCtx.strokeRect(
+                cell.x * scaleX, cell.y * scaleY,
+                cell.w * scaleX, cell.h * scaleY
+            );
+        }
+
+        if (result.targetCells) {
+            overlayCtx.strokeStyle = '#ff4444';
+            overlayCtx.lineWidth = 2;
+            for (const cell of result.targetCells) {
+                overlayCtx.strokeRect(
+                    cell.x * scaleX, cell.y * scaleY,
+                    cell.w * scaleX, cell.h * scaleY
+                );
+            }
+        }
+    }
+
     function drawResult(match) {
         clearOverlay();
 
@@ -221,7 +336,6 @@ const App = (() => {
             overlayCtx.strokeRect(x, y, w, h);
         }
 
-        // Draw connecting line
         overlayCtx.beginPath();
         overlayCtx.strokeStyle = 'rgba(34, 197, 94, 0.6)';
         overlayCtx.lineWidth = 2;

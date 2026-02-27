@@ -82,6 +82,24 @@ body {
     50% { opacity: 0.4; }
 }
 
+#debug {
+    position: absolute;
+    top: 55px;
+    left: 8px;
+    right: 8px;
+    font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 11px;
+    color: #0f0;
+    background: rgba(0, 0, 0, 0.75);
+    padding: 6px 10px;
+    border-radius: 8px;
+    z-index: 10;
+    white-space: pre-wrap;
+    display: none;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
 #position {
     position: absolute;
     bottom: 100px;
@@ -132,6 +150,12 @@ body {
 #btnStop {
     background: rgba(239, 68, 68, 0.9);
     color: #fff;
+}
+
+#btnCapture {
+    background: rgba(59, 130, 246, 0.9);
+    color: #fff;
+    margin-left: 10px;
 }
 
 .hidden {

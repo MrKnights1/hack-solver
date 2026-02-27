@@ -1,0 +1,7 @@
+{
+  "name": "hack-solver",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/run.test.js"
+  }
+}

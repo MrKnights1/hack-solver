@@ -17,12 +17,14 @@ const OCR = (() => {
         numeric: { lang: 'eng', whitelist: DIGITS },
         alpha: { lang: 'eng', whitelist: LATIN_UPPER + LATIN_LOWER },
         greek: { lang: 'ell', whitelist: GREEK_UPPER + GREEK_LOWER },
-        alphanum: { lang: 'eng', whitelist: DIGITS + LATIN_UPPER + LATIN_LOWER }
+        alphanum: { lang: 'eng', whitelist: DIGITS + LATIN_UPPER + LATIN_LOWER },
+        braille: { lang: 'eng', whitelist: '' },
+        runes: { lang: 'eng', whitelist: '' }
     };
 
-    const CODE_CHAR_RE = /[A-Za-z0-9\u0370-\u03FF]/;
-    const CODE_CHARS_RE = /[^A-Za-z0-9\u0370-\u03FF]/g;
-    const CODE_CHARS_SPACE_RE = /[^A-Za-z0-9\u0370-\u03FF\s]/g;
+    const CODE_CHAR_RE = /[A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF]/;
+    const CODE_CHARS_RE = /[^A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF]/g;
+    const CODE_CHARS_SPACE_RE = /[^A-Za-z0-9\u0370-\u03FF\u16A0-\u16FF\u2800-\u28FF\s]/g;
 
     async function init(lang) {
         lang = lang || 'eng';
@@ -410,6 +412,6 @@ const OCR = (() => {
     return {
         init, switchLang, ocrTarget, ocrGrid, terminate,
         detectCharsetFromFrame, getDetectedCharset, setDetectedCharset,
-        cropRegion, binarize, parseRowCodes
+        cropRegion, binarize, parseRowCodes, parseTargetCodes
     };
 })();

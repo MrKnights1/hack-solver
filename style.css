@@ -158,6 +158,16 @@ body {
     margin-left: 10px;
 }
 
+#version {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    font-family: monospace;
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    z-index: 20;
+}
+
 .hidden {
     display: none !important;
 }

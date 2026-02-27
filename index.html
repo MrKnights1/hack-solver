@@ -21,6 +21,7 @@
         </div>
 
         <div id="debug"></div>
+        <div id="version">v6-ocr</div>
         <div id="position"></div>
 
         <div id="controls">
@@ -39,7 +40,10 @@
     <script src="app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js').catch(() => {});
+            navigator.serviceWorker.getRegistrations().then(regs => {
+                regs.forEach(r => r.unregister());
+            });
+            caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
         }
     </script>
 </body>

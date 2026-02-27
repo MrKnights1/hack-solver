@@ -191,37 +191,37 @@ const App = (() => {
     }
 
     async function startOCR(frame) {
-        setState('reading', 'Loading OCR engine...');
+        setState('reading', 'Loading OCR...');
+        log('Initializing Tesseract...');
 
         try {
             await OCR.init('eng');
-            await OCR.setWhitelist('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz');
+            log('Tesseract ready');
 
             setState('reading', 'Reading target...');
             const targetCodes = await OCR.ocrTarget(frame, gridInfo);
 
             if (!targetCodes) {
-                log('OCR: Could not read target codes');
+                log('Target OCR failed - retrying');
                 setState('detecting');
                 setTimeout(runDetection, 1000);
                 return;
             }
 
-            log(`Target: ${targetCodes.join(' ')}`);
+            log(`Target: [${targetCodes.join(', ')}]`);
             gridInfo.targetCodes = targetCodes;
 
-            setState('reading', 'Reading grid...');
+            setState('reading', `Reading grid (${gridInfo.rows} rows)...`);
             const gridCodes = await OCR.ocrGrid(frame, gridInfo);
 
             if (!gridCodes) {
-                log('OCR: Could not read grid codes');
+                log('Grid OCR failed - retrying');
                 setState('detecting');
                 setTimeout(runDetection, 1000);
                 return;
             }
 
             gridInfo.gridCodes = gridCodes;
-            log(`Target: ${targetCodes.join(' ')}\nGrid: ${gridCodes.length} codes read`);
 
             const match = Matcher.findMatchByText(targetCodes, gridCodes);
 
@@ -229,17 +229,21 @@ const App = (() => {
                 lastMatch = match;
                 setState('tracking');
                 drawResult(match);
-                log(`FOUND at R${match.row} C${match.col}\nTarget: ${targetCodes.join(' ')}\nConfidence: ${(match.confidence * 100).toFixed(0)}%`);
+                log(`FOUND R${match.row}C${match.col}\nTarget: [${targetCodes.join(', ')}]\nConf: ${(match.confidence * 100).toFixed(0)}%`);
 
                 ocrIntervalId = setInterval(() => refreshOCR(), 3000);
             } else {
-                log(`No match found\nTarget: ${targetCodes.join(' ')}\nGrid sample: ${gridCodes.slice(0, 10).join(' ')}`);
+                log(`No match\nTarget: [${targetCodes.join(', ')}]\nR1: ${gridCodes.slice(0, 10).join(' ')}\nR2: ${gridCodes.slice(10, 20).join(' ')}`);
                 setState('detecting');
                 setTimeout(runDetection, 2000);
             }
         } catch (err) {
-            log('OCR error: ' + err.message);
+            log('OCR error: ' + err.message + '\n' + err.stack);
             setState('error', 'OCR failed');
+            setTimeout(() => {
+                setState('detecting');
+                runDetection();
+            }, 3000);
         }
     }
 

@@ -196,7 +196,12 @@ const App = (() => {
 
         try {
             await OCR.init('eng');
-            log('Tesseract ready');
+            log('Detecting character set...');
+
+            setState('reading', 'Detecting charset...');
+            const charset = await OCR.detectCharsetFromFrame(frame, gridInfo);
+            OCR.setDetectedCharset(charset);
+            log('Charset: ' + charset);
 
             setState('reading', 'Reading target...');
             const targetCodes = await OCR.ocrTarget(frame, gridInfo);
@@ -229,7 +234,7 @@ const App = (() => {
                 lastMatch = match;
                 setState('tracking');
                 drawResult(match);
-                log(`FOUND R${match.row}C${match.col}\nTarget: [${targetCodes.join(', ')}]\nConf: ${(match.confidence * 100).toFixed(0)}%`);
+                log(`FOUND R${match.row}C${match.col}\nCharset: ${charset}\nTarget: [${targetCodes.join(', ')}]\nConf: ${(match.confidence * 100).toFixed(0)}%`);
 
                 ocrIntervalId = setInterval(() => refreshOCR(), 3000);
             } else {

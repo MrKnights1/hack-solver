@@ -233,7 +233,12 @@ const App = (() => {
 
                 ocrIntervalId = setInterval(() => refreshOCR(), 3000);
             } else {
-                log(`No match\nTarget: [${targetCodes.join(', ')}]\nR1: ${gridCodes.slice(0, 10).join(' ')}\nR2: ${gridCodes.slice(10, 20).join(' ')}`);
+                let dbg = `No match\nT: [${targetCodes.join(',')}]`;
+                const gc = gridInfo.cols || 10;
+                for (let r = 0; r < Math.ceil(gridCodes.length / gc); r++) {
+                    dbg += `\nR${r+1}: ${gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                }
+                log(dbg);
                 setState('detecting');
                 setTimeout(runDetection, 2000);
             }

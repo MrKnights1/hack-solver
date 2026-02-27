@@ -197,14 +197,18 @@ const Matcher = (() => {
             }
         }
 
-        if (bestPos >= 0 && bestScore <= 3 && (secondBest - bestScore) >= 0.5) {
+        if (bestPos >= 0 && bestScore <= 3) {
+            const gap = secondBest - bestScore;
+            const confidence = gap > 0
+                ? Math.max(0.1, Math.min(1, gap / numTargets))
+                : 0.1;
             return {
                 position: bestPos,
                 row: Math.floor(bestPos / cols) + 1,
                 col: (bestPos % cols) + 1,
                 cols,
                 score: bestScore,
-                confidence: Math.max(0, Math.min(1, (secondBest - bestScore) / numTargets))
+                confidence
             };
         }
 

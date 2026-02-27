@@ -6,6 +6,7 @@ const App = (() => {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const positionEl = document.getElementById('position');
+    const debugEl = document.getElementById('debug');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
 
@@ -23,6 +24,10 @@ const App = (() => {
         overlayEl.width = overlayEl.clientWidth * (window.devicePixelRatio || 1);
         overlayEl.height = overlayEl.clientHeight * (window.devicePixelRatio || 1);
         overlayCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+    }
+
+    function debug(msg) {
+        debugEl.textContent = msg;
     }
 
     async function handleStart() {
@@ -48,6 +53,7 @@ const App = (() => {
         btnStop.classList.add('hidden');
         positionEl.style.display = 'none';
         clearOverlay();
+        debug('');
         setStatus('idle', 'Tap START to begin');
     }
 
@@ -64,13 +70,24 @@ const App = (() => {
         const frame = Camera.captureFrame();
         if (!frame) {
             setStatus('error', 'No frame - try again');
+            debug('captureFrame returned null');
+            return;
+        }
+        debug(`Frame: ${frame.width}x${frame.height}`);
+
+        const detection = Detector.detect(frame);
+        if (!detection) {
+            setStatus('error', 'Grid not found - tap SCAN');
+            debug('Detector returned null');
             return;
         }
 
-        const detection = Detector.detect(frame);
-        if (!detection || detection.gridCells.length < 30
-            || !detection.targetCells || detection.targetCells.length < 3) {
-            setStatus('error', 'Grid not found - tap SCAN');
+        const gc = detection.gridCells.length;
+        const tc = detection.targetCells ? detection.targetCells.length : 0;
+        debug(`Detected: ${gc} grid, ${tc} target`);
+
+        if (gc < 30 || tc < 3) {
+            setStatus('error', `Need 30+ grid & 3+ target, got ${gc}/${tc}`);
             return;
         }
 
@@ -81,12 +98,15 @@ const App = (() => {
         const match = Matcher.findMatch(targetCells, gridCells);
         if (!match) {
             setStatus('error', 'No match found - tap SCAN');
+            debug(`Extracted ${gridCells.length} grid, ${targetCells.length} target - no match`);
             return;
         }
 
         const cols = match.cols || 10;
         const row = Math.floor(match.position / cols) + 1;
         const col = (match.position % cols) + 1;
+
+        debug(`pos=${match.position} R${row}C${col} score=${match.score.toFixed(3)} conf=${(match.confidence * 100).toFixed(1)}%`);
 
         drawResult(detection, match.position, targetCells.length);
         positionEl.textContent = `R${row} C${col}  (${Math.round(match.confidence * 100)}%)`;

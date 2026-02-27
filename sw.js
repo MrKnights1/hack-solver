@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hack-solver-v3';
+const CACHE_NAME = 'hack-solver-v4';
 const ASSETS = [
     './',
     './index.html',

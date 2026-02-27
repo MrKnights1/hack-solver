@@ -267,6 +267,49 @@ const OCR = (() => {
         return codes2 && codes2.length >= 2 ? codes2 : null;
     }
 
+    async function ocrGridBlock(frame, gridInfo, whitelist) {
+        if (!gridInfo.gridCells || gridInfo.gridCells.length < 30) return null;
+
+        const cols = gridInfo.cols || 10;
+        const rows = gridInfo.rows || 8;
+        const pad = 6;
+
+        const firstCell = gridInfo.gridCells[0];
+        const lastCell = gridInfo.gridCells[gridInfo.gridCells.length - 1];
+        const x = Math.max(0, firstCell.x - pad);
+        const y = Math.max(0, firstCell.y - pad);
+        const w = Math.min(frame.width - x, (lastCell.x + lastCell.w) - firstCell.x + pad * 2);
+        const h = Math.min(frame.height - y, (lastCell.y + lastCell.h) - firstCell.y + pad * 2);
+
+        await worker.setParameters({
+            tessedit_pageseg_mode: '6',
+            tessedit_char_whitelist: whitelist || ''
+        });
+
+        const canvas = cropRegion(frame, x, y, w, h);
+        if (!canvas) return null;
+
+        const result = await worker.recognize(canvas);
+        const text = result.data.text.trim();
+        const lines = text.split('\n').filter(l => l.trim().length > 0);
+
+        const allCodes = [];
+        for (let r = 0; r < rows; r++) {
+            if (r < lines.length) {
+                const codes = parseRowCodes(lines[r].trim(), cols);
+                if (codes.length === cols) {
+                    allCodes.push(...codes);
+                } else {
+                    for (let c = 0; c < cols; c++) allCodes.push(codes[c] || '??');
+                }
+            } else {
+                for (let c = 0; c < cols; c++) allCodes.push('??');
+            }
+        }
+
+        return allCodes.length === rows * cols ? allCodes : null;
+    }
+
     async function ocrGrid(frame, gridInfo, whitelist) {
         if (!gridInfo.gridCells || gridInfo.gridCells.length < 30) return null;
 
@@ -282,22 +325,14 @@ const OCR = (() => {
         for (let r = 0; r < rows; r++) {
             const crop = getRowCrop(frame, gridInfo, r);
 
-            let canvas = cropRegion(frame, crop.x, crop.y, crop.w, crop.h);
+            const canvas = cropRegion(frame, crop.x, crop.y, crop.w, crop.h);
             if (!canvas) {
                 for (let c = 0; c < cols; c++) allCodes.push('??');
                 continue;
             }
 
-            let result = await worker.recognize(canvas);
-            let codes = parseRowCodes(result.data.text.trim(), cols);
-
-            if (codes.length !== cols) {
-                canvas = binarize(cropRegion(frame, crop.x, crop.y, crop.w, crop.h));
-                if (canvas) {
-                    result = await worker.recognize(canvas);
-                    codes = parseRowCodes(result.data.text.trim(), cols);
-                }
-            }
+            const result = await worker.recognize(canvas);
+            const codes = parseRowCodes(result.data.text.trim(), cols);
 
             if (codes.length === cols) {
                 allCodes.push(...codes);
@@ -320,7 +355,7 @@ const OCR = (() => {
     }
 
     return {
-        init, ocrTarget, ocrGrid, terminate,
+        init, ocrTarget, ocrGridBlock, ocrGrid, terminate,
         cropRegion, binarize, parseRowCodes, parseTargetCodes,
         normalizeText, normalizeCodes, guessWhitelist
     };

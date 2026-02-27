@@ -2,6 +2,12 @@
   "name": "hack-solver",
   "private": true,
   "scripts": {
-    "test": "node --test test/run.test.js"
+    "test": "node --test test/run.test.js test/ground-truth.test.js",
+    "test:ocr": "node --test test/ocr-integration.test.js",
+    "test:all": "node --test test/run.test.js test/ground-truth.test.js test/ocr-integration.test.js"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0"
   }
 }

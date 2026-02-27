@@ -44,6 +44,7 @@ const App = (() => {
             btnCapture.classList.remove('hidden');
             detectAttempts = 0;
             setState('detecting');
+            OCR.init().catch(() => {});
             runDetection();
         } catch (err) {
             setState('error', 'Camera access denied');
@@ -192,7 +193,6 @@ const App = (() => {
 
     async function startOCR(frame) {
         setState('reading', 'Loading OCR...');
-        log('Initializing Tesseract (eng+ell)...');
 
         try {
             await OCR.init();
@@ -210,24 +210,27 @@ const App = (() => {
             log(`Target: [${rawTarget.join(', ')}] wl:${whitelist.length}`);
 
             setState('reading', 'Reading grid...');
-            const rawGrid = await OCR.ocrGrid(frame, gridInfo, whitelist);
-            if (!rawGrid) {
-                log('Failed to read grid codes');
-                setState('detecting');
-                setTimeout(runDetection, 2000);
-                return;
-            }
+            let rawGrid = await OCR.ocrGridBlock(frame, gridInfo, whitelist);
 
-            const targetCodes = OCR.normalizeCodes(rawTarget);
-            const gridCodes = OCR.normalizeCodes(rawGrid);
-
-            const match = Matcher.findMatchByText(targetCodes, gridCodes);
+            let targetCodes = OCR.normalizeCodes(rawTarget);
+            let gridCodes = rawGrid ? OCR.normalizeCodes(rawGrid) : null;
+            let match = gridCodes ? Matcher.findMatchByText(targetCodes, gridCodes) : null;
 
             if (!match) {
+                rawGrid = await OCR.ocrGrid(frame, gridInfo, whitelist);
+                if (rawGrid) {
+                    gridCodes = OCR.normalizeCodes(rawGrid);
+                    match = Matcher.findMatchByText(targetCodes, gridCodes);
+                }
+            }
+
+            if (!match || !gridCodes) {
                 let dbg = `No match\nT: [${targetCodes.join(',')}]`;
-                const gc = gridInfo.cols || 10;
-                for (let r = 0; r < Math.ceil(gridCodes.length / gc); r++) {
-                    dbg += `\nR${r+1}: ${gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                if (gridCodes) {
+                    const gc = gridInfo.cols || 10;
+                    for (let r = 0; r < Math.ceil(gridCodes.length / gc); r++) {
+                        dbg += `\nR${r+1}: ${gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                    }
                 }
                 log(dbg);
                 setState('detecting');
@@ -265,14 +268,20 @@ const App = (() => {
 
             gridInfo = result;
 
-            const rawGrid = await OCR.ocrGrid(frame, gridInfo);
-            if (!rawGrid) return;
+            let rawGrid = await OCR.ocrGridBlock(frame, gridInfo);
+            let gridCodes = rawGrid ? OCR.normalizeCodes(rawGrid) : null;
+            let match = gridCodes ? Matcher.findMatchByText(gridInfo.targetCodes, gridCodes) : null;
 
-            const gridCodes = OCR.normalizeCodes(rawGrid);
-            gridInfo.gridCodes = gridCodes;
+            if (!match) {
+                rawGrid = await OCR.ocrGrid(frame, gridInfo);
+                if (rawGrid) {
+                    gridCodes = OCR.normalizeCodes(rawGrid);
+                    match = Matcher.findMatchByText(gridInfo.targetCodes, gridCodes);
+                }
+            }
 
-            const match = Matcher.findMatchByText(gridInfo.targetCodes, gridCodes);
-            if (match) {
+            if (match && gridCodes) {
+                gridInfo.gridCodes = gridCodes;
                 lastMatch = match;
                 drawResult(match);
                 log(`R${match.row} C${match.col} | ${gridInfo.targetCodes.join(' ')}`);

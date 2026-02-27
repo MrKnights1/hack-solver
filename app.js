@@ -190,6 +190,21 @@ const App = (() => {
         }
     }
 
+    async function tryOCRPipeline(frame, charset) {
+        OCR.setDetectedCharset(charset);
+
+        setState('reading', `Reading target (${charset})...`);
+        const targetCodes = await OCR.ocrTarget(frame, gridInfo);
+        if (!targetCodes) return null;
+
+        setState('reading', `Reading grid (${charset})...`);
+        const gridCodes = await OCR.ocrGrid(frame, gridInfo);
+        if (!gridCodes) return null;
+
+        const match = Matcher.findMatchByText(targetCodes, gridCodes);
+        return { targetCodes, gridCodes, match, charset };
+    }
+
     async function startOCR(frame) {
         setState('reading', 'Loading OCR...');
         log('Initializing Tesseract...');
@@ -200,53 +215,50 @@ const App = (() => {
 
             setState('reading', 'Detecting charset...');
             const charset = await OCR.detectCharsetFromFrame(frame, gridInfo);
-            OCR.setDetectedCharset(charset);
-            log('Charset: ' + charset);
+            log('Detected: ' + charset);
 
-            setState('reading', 'Reading target...');
-            const targetCodes = await OCR.ocrTarget(frame, gridInfo);
+            // Try detected charset first
+            let result = await tryOCRPipeline(frame, charset);
 
-            if (!targetCodes) {
-                log('Target OCR failed - retrying');
-                setState('detecting');
-                setTimeout(runDetection, 1000);
-                return;
-            }
+            // If no match, try fallback charsets
+            if (!result || !result.match) {
+                const fallbacks = ['numeric', 'alpha', 'greek', 'alphanum'].filter(c => c !== charset);
+                const firstResult = result;
 
-            log(`Target: [${targetCodes.join(', ')}]`);
-            gridInfo.targetCodes = targetCodes;
-
-            setState('reading', `Reading grid (${gridInfo.rows} rows)...`);
-            const gridCodes = await OCR.ocrGrid(frame, gridInfo);
-
-            if (!gridCodes) {
-                log('Grid OCR failed - retrying');
-                setState('detecting');
-                setTimeout(runDetection, 1000);
-                return;
-            }
-
-            gridInfo.gridCodes = gridCodes;
-
-            const match = Matcher.findMatchByText(targetCodes, gridCodes);
-
-            if (match) {
-                lastMatch = match;
-                setState('tracking');
-                drawResult(match);
-                log(`FOUND R${match.row}C${match.col}\nCharset: ${charset}\nTarget: [${targetCodes.join(', ')}]\nConf: ${(match.confidence * 100).toFixed(0)}%`);
-
-                ocrIntervalId = setInterval(() => refreshOCR(), 3000);
-            } else {
-                let dbg = `No match\nT: [${targetCodes.join(',')}]`;
-                const gc = gridInfo.cols || 10;
-                for (let r = 0; r < Math.ceil(gridCodes.length / gc); r++) {
-                    dbg += `\nR${r+1}: ${gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                for (const fb of fallbacks) {
+                    log(`No match with ${result ? result.charset : charset}, trying ${fb}...`);
+                    result = await tryOCRPipeline(frame, fb);
+                    if (result && result.match) break;
                 }
-                log(dbg);
-                setState('detecting');
-                setTimeout(runDetection, 2000);
+
+                // If still no match, show debug from best attempt
+                if (!result || !result.match) {
+                    const best = result || firstResult;
+                    if (best && best.targetCodes && best.gridCodes) {
+                        let dbg = `No match (tried all charsets)\nT: [${best.targetCodes.join(',')}]`;
+                        const gc = gridInfo.cols || 10;
+                        for (let r = 0; r < Math.ceil(best.gridCodes.length / gc); r++) {
+                            dbg += `\nR${r+1}: ${best.gridCodes.slice(r*gc, r*gc+gc).join(' ')}`;
+                        }
+                        log(dbg);
+                    } else {
+                        log('OCR failed for all charsets - retrying');
+                    }
+                    setState('detecting');
+                    setTimeout(runDetection, 2000);
+                    return;
+                }
             }
+
+            // Match found
+            gridInfo.targetCodes = result.targetCodes;
+            gridInfo.gridCodes = result.gridCodes;
+            lastMatch = result.match;
+            setState('tracking');
+            drawResult(result.match);
+            log(`FOUND R${result.match.row}C${result.match.col}\nCharset: ${result.charset}\nTarget: [${result.targetCodes.join(', ')}]\nConf: ${(result.match.confidence * 100).toFixed(0)}%`);
+
+            ocrIntervalId = setInterval(() => refreshOCR(), 3000);
         } catch (err) {
             log('OCR error: ' + err.message + '\n' + err.stack);
             setState('error', 'OCR failed');

@@ -6,7 +6,7 @@
 
 body {
     background: #0a0a0a;
-    overflow: hidden;
+    overflow-x: hidden;
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
@@ -188,6 +188,17 @@ body {
 #toast.show {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
+}
+
+#debugCanvas {
+    position: absolute;
+    bottom: 160px;
+    left: 8px;
+    z-index: 20;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid #333;
+    border-radius: 6px;
+    image-rendering: pixelated;
 }
 
 .hidden {

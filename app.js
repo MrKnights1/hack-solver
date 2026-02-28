@@ -7,6 +7,8 @@ const App = (() => {
     const statusText = document.getElementById('statusText');
     const positionEl = document.getElementById('position');
     const debugEl = document.getElementById('debug');
+    const debugCanvas = document.getElementById('debugCanvas');
+    const debugCCtx = debugCanvas.getContext('2d', { willReadFrequently: true });
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
 
@@ -20,6 +22,19 @@ const App = (() => {
         btnStop.addEventListener('click', handleStop);
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
+        autoStartCamera();
+    }
+
+    async function autoStartCamera() {
+        try {
+            await Camera.start();
+            cameraRunning = true;
+            btnStart.textContent = 'SCAN';
+            btnStop.classList.remove('hidden');
+            setStatus('idle', 'Tap SCAN to find match');
+        } catch (err) {
+            setStatus('idle', 'Tap START to begin');
+        }
     }
 
     function resizeOverlay() {
@@ -135,6 +150,7 @@ const App = (() => {
             var bestScore = Infinity;
             var bestCharset = '';
             var bestTargetCodes = null;
+            var bestGridCodes = null;
 
             for (var ci = 0; ci < charsetNames.length; ci++) {
                 var csName = charsetNames[ci];
@@ -158,6 +174,7 @@ const App = (() => {
                     bestMatch = m;
                     bestCharset = csName;
                     bestTargetCodes = tCodes;
+                    bestGridCodes = gCodes;
                 }
             }
 
@@ -212,6 +229,12 @@ const App = (() => {
                 debug('NO MATCH (all strategies failed)');
                 setStatus('error', 'No match found');
             }
+
+            // Visual debug: show extracted cells vs templates
+            drawDebugCells(
+                extracted.targetCells, extracted.gridCells,
+                bestTargetCodes, bestGridCodes, bestCharset
+            );
         } catch (err) {
             debug('Error: ' + err.message);
             setStatus('error', 'Scan failed');
@@ -263,6 +286,112 @@ const App = (() => {
         }
         overlayCtx.stroke();
         overlayCtx.shadowBlur = 0;
+    }
+
+    function drawDebugCells(targetCells, gridCells, targetCodes, gridCodes, charset) {
+        var S = 32;
+        var scale = 2;
+        var D = S * scale;
+        var gap = 4;
+        var labelH = 14;
+
+        // Show: target cells (row 1), first 10 grid cells (row 2), template matches (row 3)
+        var numGrid = Math.min(10, gridCells.length);
+        var maxCols = Math.max(targetCells.length, numGrid);
+        var totalW = maxCols * (D + gap) + gap;
+        var totalH = 3 * (D + labelH + gap) + gap + labelH;
+
+        debugCanvas.width = totalW;
+        debugCanvas.height = totalH;
+        debugCanvas.style.width = totalW + 'px';
+        debugCanvas.style.height = totalH + 'px';
+
+        debugCCtx.fillStyle = '#000';
+        debugCCtx.fillRect(0, 0, totalW, totalH);
+        debugCCtx.font = '11px monospace';
+        debugCCtx.textAlign = 'center';
+
+        // Row label
+        debugCCtx.fillStyle = '#888';
+        debugCCtx.textAlign = 'left';
+        debugCCtx.fillText('TARGET:', gap, 10);
+
+        // Row 1: target cells
+        var y0 = labelH;
+        for (var t = 0; t < targetCells.length; t++) {
+            var x = gap + t * (D + gap);
+            drawCell(debugCCtx, targetCells[t], x, y0, S, scale);
+            debugCCtx.fillStyle = '#0f0';
+            debugCCtx.textAlign = 'center';
+            debugCCtx.fillText(targetCodes ? targetCodes[t] : '?', x + D / 2, y0 + D + 12);
+        }
+
+        // Row label
+        debugCCtx.fillStyle = '#888';
+        debugCCtx.textAlign = 'left';
+        debugCCtx.fillText('GRID[0-9]:', gap, y0 + D + labelH + gap);
+
+        // Row 2: first 10 grid cells
+        var y1 = y0 + D + labelH + gap + labelH;
+        for (var g = 0; g < numGrid; g++) {
+            var x2 = gap + g * (D + gap);
+            drawCell(debugCCtx, gridCells[g], x2, y1, S, scale);
+            debugCCtx.fillStyle = '#ff0';
+            debugCCtx.textAlign = 'center';
+            debugCCtx.fillText(gridCodes ? gridCodes[g] : '?', x2 + D / 2, y1 + D + 12);
+        }
+
+        // Row label
+        debugCCtx.fillStyle = '#888';
+        debugCCtx.textAlign = 'left';
+        debugCCtx.fillText('TEMPLATE:', gap, y1 + D + labelH + gap);
+
+        // Row 3: template images for target codes
+        var y2 = y1 + D + labelH + gap + labelH;
+        if (charset && targetCodes) {
+            var tpls = Templates.getCharset(charset);
+            for (var tc = 0; tc < targetCodes.length; tc++) {
+                var code = targetCodes[tc];
+                // Find matching template halves and draw them side by side
+                var leftChar = code[0];
+                var rightChar = code[1];
+                var leftTpl = null, rightTpl = null;
+                for (var ti = 0; ti < tpls.length; ti++) {
+                    if (tpls[ti].char === leftChar) leftTpl = tpls[ti];
+                    if (tpls[ti].char === rightChar) rightTpl = tpls[ti];
+                }
+                var x3 = gap + tc * (D + gap);
+                // Draw left half
+                if (leftTpl) drawCell(debugCCtx, leftTpl.pixels, x3, y2, S, scale / 2);
+                // Draw right half
+                if (rightTpl) drawCell(debugCCtx, rightTpl.pixels, x3 + D / 2, y2, S, scale / 2);
+                debugCCtx.fillStyle = '#0ff';
+                debugCCtx.textAlign = 'center';
+                debugCCtx.fillText(code, x3 + D / 2, y2 + D + 12);
+            }
+        }
+    }
+
+    function drawCell(ctx, pixels, x, y, size, scale) {
+        var d = size * scale;
+        var imgData = ctx.createImageData(size, size);
+        for (var i = 0; i < pixels.length; i++) {
+            var v = pixels[i];
+            imgData.data[i * 4] = v;
+            imgData.data[i * 4 + 1] = v;
+            imgData.data[i * 4 + 2] = v;
+            imgData.data[i * 4 + 3] = 255;
+        }
+        // Draw at native size then scale up
+        var tmp = document.createElement('canvas');
+        tmp.width = size;
+        tmp.height = size;
+        tmp.getContext('2d').putImageData(imgData, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(tmp, 0, 0, size, size, x, y, d, d);
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, d, d);
     }
 
     function clearOverlay() {

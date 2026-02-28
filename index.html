@@ -9,6 +9,16 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="style.css">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(regs) {
+                regs.forEach(function(r) { r.unregister(); });
+            });
+            caches.keys().then(function(keys) {
+                keys.forEach(function(k) { caches.delete(k); });
+            });
+        }
+    </script>
 </head>
 <body>
     <div id="app">
@@ -21,7 +31,7 @@
         </div>
 
         <div id="debug"></div>
-        <div id="version">v17-templates</div>
+        <div id="version">v18</div>
         <div id="position"></div>
 
         <div id="controls">
@@ -36,13 +46,5 @@
     <script src="templates.js"></script>
     <script src="matcher.js"></script>
     <script src="app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(regs => {
-                regs.forEach(r => r.unregister());
-            });
-            caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
-        }
-    </script>
 </body>
 </html>

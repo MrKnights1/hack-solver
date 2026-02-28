@@ -59,8 +59,24 @@ const Matcher = (() => {
     }
 
     /**
+     * Masked hamming: only compare pixels where at least one cell has
+     * foreground (text). Ignores background-to-background agreement
+     * which would otherwise dilute the discriminative signal.
+     * Returns 0 (identical foreground) to 1 (completely different).
+     */
+    function maskedHamming(binA, binB) {
+        var mask = 0, diff = 0;
+        for (var i = 0; i < binA.length; i++) {
+            if (binA[i] > 0 || binB[i] > 0) {
+                mask++;
+                if (binA[i] !== binB[i]) diff++;
+            }
+        }
+        return mask === 0 ? 1 : diff / mask;
+    }
+
+    /**
      * Downsample 32×32 to 16×16 by averaging 2×2 blocks.
-     * Provides alignment tolerance — small shifts get absorbed by the averaging.
      */
     function downsample2x(pixels) {
         var out = new Uint8Array(256);
@@ -77,10 +93,12 @@ const Matcher = (() => {
      * Find the best starting position where 4 consecutive grid cells
      * match the 4 target cells.
      *
-     * Uses a multi-signal ensemble for robustness:
-     * - NCC on 32×32 grayscale (invariant to brightness/contrast)
-     * - NCC on 16×16 downsampled (tolerant to small alignment shifts)
-     * - Binary hamming on 32×32 (shape tiebreaker)
+     * Uses masked binary hamming as the primary metric — compares only
+     * foreground (text) pixels, ignoring background agreement that would
+     * otherwise make all cells look similar.
+     *
+     * Best 3-of-4 scoring: drops the worst-matching target cell to handle
+     * one badly-extracted cell.
      */
     function findMatch(targetCells, gridCells) {
         if (targetCells.length < 4 || gridCells.length < 4) {
@@ -90,39 +108,42 @@ const Matcher = (() => {
         var numTargets = Math.min(4, targetCells.length);
         var numGridCells = gridCells.length;
 
-        // Pre-compute downsampled and binary versions
-        var targetSmall = [], targetBin = [];
+        // Pre-compute binary at full and half resolution
+        var targetBin = [], targetBinSmall = [];
         for (var t = 0; t < numTargets; t++) {
-            targetSmall.push(downsample2x(targetCells[t]));
             targetBin.push(toBinary(targetCells[t]));
+            targetBinSmall.push(toBinary(downsample2x(targetCells[t])));
         }
-        var gridSmall = new Array(numGridCells);
         var gridBin = new Array(numGridCells);
+        var gridBinSmall = new Array(numGridCells);
         for (var g = 0; g < numGridCells; g++) {
-            gridSmall[g] = downsample2x(gridCells[g]);
             gridBin[g] = toBinary(gridCells[g]);
+            gridBinSmall[g] = toBinary(downsample2x(gridCells[g]));
         }
 
         var scores = new Float64Array(numGridCells);
 
         for (var pos = 0; pos < numGridCells; pos++) {
-            var total = 0;
+            // Compute per-cell distances, then use best 3-of-4
+            var cellScores = [];
             for (var t2 = 0; t2 < numTargets; t2++) {
                 var gridIdx = (pos + t2) % numGridCells;
 
-                // NCC on full-res grayscale: pattern correlation (1 = perfect)
-                var nccFull = ncc(targetCells[t2], gridCells[gridIdx]);
+                // Primary: masked hamming at full resolution (foreground-only)
+                var mh = maskedHamming(targetBin[t2], gridBin[gridIdx]);
 
-                // NCC on downsampled: alignment-tolerant correlation
-                var nccHalf = ncc(targetSmall[t2], gridSmall[gridIdx]);
+                // Secondary: masked hamming at 16×16 (alignment tolerant)
+                var mhSmall = maskedHamming(targetBinSmall[t2], gridBinSmall[gridIdx]);
 
-                // Hamming on binary: shape distance (0 = perfect)
-                var hamVal = hammingDist(targetBin[t2], gridBin[gridIdx]);
+                // Tertiary: standard hamming (includes background context)
+                var ham = hammingDist(targetBin[t2], gridBin[gridIdx]);
 
-                // Combined distance (lower = better)
-                total += (1 - nccFull) + (1 - nccHalf) + hamVal * 0.5;
+                cellScores.push(mh * 2 + mhSmall + ham * 0.5);
             }
-            scores[pos] = total;
+
+            // Best 3-of-4: sort and drop worst cell match
+            cellScores.sort(function(a, b) { return a - b; });
+            scores[pos] = cellScores[0] + cellScores[1] + cellScores[2];
         }
 
         // Find top 3 matches (lowest scores)
@@ -343,5 +364,5 @@ const Matcher = (() => {
         return bestName;
     }
 
-    return { findMatch, findMatchByText, identifyChar, identifyCode, detectCharset, ncc, hammingDist, toBinary };
+    return { findMatch, findMatchByText, identifyChar, identifyCode, detectCharset, ncc, hammingDist, maskedHamming, toBinary };
 })();

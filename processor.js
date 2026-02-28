@@ -16,7 +16,7 @@ const Processor = (() => {
      * Tight-crops to text content before scaling so characters at different
      * font sizes produce similar normalized images.
      */
-    function extractCell(imageData, blob, padding) {
+    function extractCell(imageData, blob, padding, overrideThreshold) {
         const { canvas, ctx } = getCanvas();
         const { width, height, data } = imageData;
         const pad = padding || 2;
@@ -38,13 +38,18 @@ const Processor = (() => {
             }
         }
 
-        // Find threshold for this cell (Otsu-like: midpoint between min and max)
-        let minVal = 255, maxVal = 0;
-        for (let i = 0; i < cellGray.length; i++) {
-            if (cellGray[i] < minVal) minVal = cellGray[i];
-            if (cellGray[i] > maxVal) maxVal = cellGray[i];
+        // Use global threshold if provided, otherwise compute per-cell
+        let threshold;
+        if (overrideThreshold !== undefined) {
+            threshold = overrideThreshold;
+        } else {
+            let minVal = 255, maxVal = 0;
+            for (let i = 0; i < cellGray.length; i++) {
+                if (cellGray[i] < minVal) minVal = cellGray[i];
+                if (cellGray[i] > maxVal) maxVal = cellGray[i];
+            }
+            threshold = (minVal + maxVal) / 2;
         }
-        const threshold = (minVal + maxVal) / 2;
 
         // Find tight bounding box of text pixels (above threshold)
         let tMinX = sw, tMaxX = 0, tMinY = sh, tMaxY = 0;
@@ -123,12 +128,52 @@ const Processor = (() => {
     }
 
     /**
+     * Compute a global threshold from all cell regions for consistent tight-cropping.
+     * Uses the same threshold for target and grid cells so the same character code
+     * produces the same tight-crop boundaries regardless of screen position.
+     */
+    function computeGlobalThreshold(imageData, allBlobs) {
+        var globalMin = 255, globalMax = 0;
+        var imgData = imageData.data;
+        var imgW = imageData.width;
+        var imgH = imageData.height;
+
+        for (var b = 0; b < allBlobs.length; b++) {
+            var blob = allBlobs[b];
+            var bx = Math.max(0, blob.x);
+            var by = Math.max(0, blob.y);
+            var bw = Math.min(imgW - bx, blob.w);
+            var bh = Math.min(imgH - by, blob.h);
+            for (var y = 0; y < bh; y++) {
+                for (var x = 0; x < bw; x++) {
+                    var idx = ((by + y) * imgW + (bx + x)) * 4;
+                    var gray = Math.round(
+                        0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2]
+                    );
+                    if (gray < globalMin) globalMin = gray;
+                    if (gray > globalMax) globalMax = gray;
+                }
+            }
+        }
+
+        return (globalMin + globalMax) / 2;
+    }
+
+    /**
      * Extract all grid cells and target cells from a camera frame.
+     * Uses a single global threshold for consistent tight-cropping.
      */
     function extractAllCells(imageData, gridBlobs, targetBlobs) {
-        const gridCells = gridBlobs.map(blob => extractCell(imageData, blob));
+        var allBlobs = gridBlobs.concat(targetBlobs || []);
+        var globalThreshold = computeGlobalThreshold(imageData, allBlobs);
+
+        const gridCells = gridBlobs.map(function(blob) {
+            return extractCell(imageData, blob, 2, globalThreshold);
+        });
         const targetCells = targetBlobs
-            ? targetBlobs.map(blob => extractCell(imageData, blob))
+            ? targetBlobs.map(function(blob) {
+                return extractCell(imageData, blob, 2, globalThreshold);
+            })
             : [];
         return { gridCells, targetCells };
     }

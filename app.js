@@ -20,6 +20,9 @@ const App = (() => {
         Camera.init(videoEl);
         btnStart.addEventListener('click', handleStart);
         btnStop.addEventListener('click', handleStop);
+        debugEl.addEventListener('click', function() {
+            debugCanvas.style.display = debugCanvas.style.display === 'none' ? 'block' : 'none';
+        });
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
         autoStartCamera();

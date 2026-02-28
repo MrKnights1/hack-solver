@@ -83,9 +83,10 @@ const App = (() => {
             if (!templatesReady) {
                 Templates.generate();
                 templatesReady = true;
-                debug('Templates generated: ' + Math.round(performance.now() - t0) + 'ms');
+                debug('Templates: ' + Math.round(performance.now() - t0) + 'ms');
             }
 
+            // 1. Capture single frame
             var frame = Camera.captureFrame();
             if (!frame) {
                 setStatus('error', 'No frame');
@@ -93,6 +94,7 @@ const App = (() => {
             }
             debug('Frame: ' + frame.width + 'x' + frame.height);
 
+            // 2. Detect grid (once)
             var det = Detector.detect(frame);
             if (!det) {
                 setStatus('error', 'Grid not found');
@@ -101,55 +103,105 @@ const App = (() => {
 
             var gc = det.gridCells.length;
             var tc = det.targetCells ? det.targetCells.length : 0;
-            debug('Grid: ' + gc + ' cells, Target: ' + tc + ' cells');
+            debug('Grid: ' + gc + ', Target: ' + tc);
 
             if (gc < 30 || tc < 3) {
                 setStatus('error', 'Not enough cells: ' + gc + '/' + tc);
                 return;
             }
 
+            // 3. Extract cells (once)
             var extracted = Processor.extractAllCells(frame, det.gridCells, det.targetCells);
 
-            // Detect charset from target cell halves
-            var targetHalves = [];
+            // 4. Split all cells into halves (once, reused across all charset attempts)
+            var targetHalvesArr = [];
+            var sampleHalves = [];
             for (var i = 0; i < extracted.targetCells.length; i++) {
                 var h = Processor.splitCellHalves(extracted.targetCells[i]);
-                targetHalves.push(h.left);
-                targetHalves.push(h.right);
+                targetHalvesArr.push(h);
+                sampleHalves.push(h.left);
+                sampleHalves.push(h.right);
             }
-            var charset = Matcher.detectCharset(targetHalves, Templates.getAllCharsets());
-            var templates = Templates.getCharset(charset);
-            debug('Charset: ' + charset);
 
-            // Identify all codes via template matching
-            var targetCodes = [];
-            for (var ti = 0; ti < extracted.targetCells.length; ti++) {
-                targetCodes.push(Matcher.identifyCode(extracted.targetCells[ti], templates));
-            }
-            var gridCodes = [];
+            var gridHalvesArr = [];
             for (var gi = 0; gi < extracted.gridCells.length; gi++) {
-                gridCodes.push(Matcher.identifyCode(extracted.gridCells[gi], templates));
+                gridHalvesArr.push(Processor.splitCellHalves(extracted.gridCells[gi]));
             }
-            debug('Target: ' + targetCodes.join(' '));
 
-            // Primary: text-based matching
-            var match = Matcher.findMatchByText(targetCodes, gridCodes);
+            // 5. Multi-strategy matching: try ALL charsets + pixel matching
+            var allCharsets = Templates.getAllCharsets();
+            var charsetNames = Object.keys(allCharsets);
+            var bestMatch = null;
+            var bestScore = Infinity;
+            var bestCharset = '';
+            var bestTargetCodes = null;
 
-            // Fallback: pixel matching if text match fails
-            if (!match) {
-                debug('Text match failed, trying pixel match');
-                match = Matcher.findMatch(extracted.targetCells, extracted.gridCells);
+            for (var ci = 0; ci < charsetNames.length; ci++) {
+                var csName = charsetNames[ci];
+                var tpls = allCharsets[csName];
+
+                // Identify target codes
+                var tCodes = [];
+                for (var ti = 0; ti < extracted.targetCells.length; ti++) {
+                    tCodes.push(Matcher.identifyCode(extracted.targetCells[ti], tpls));
+                }
+
+                // Identify grid codes
+                var gCodes = [];
+                for (var gj = 0; gj < extracted.gridCells.length; gj++) {
+                    gCodes.push(Matcher.identifyCode(extracted.gridCells[gj], tpls));
+                }
+
+                var m = Matcher.findMatchByText(tCodes, gCodes);
+                if (m && m.score < bestScore) {
+                    bestScore = m.score;
+                    bestMatch = m;
+                    bestCharset = csName;
+                    bestTargetCodes = tCodes;
+                }
+            }
+
+            // Also try pixel matching
+            var pixelMatch = Matcher.findMatch(extracted.targetCells, extracted.gridCells);
+
+            // Pick winner: exact text match (score=0) wins, otherwise best fuzzy,
+            // pixel match as last resort
+            var match = null;
+            var method = '';
+
+            if (bestMatch && bestMatch.score === 0) {
+                match = bestMatch;
+                method = bestCharset + ' exact';
+            } else if (bestMatch && pixelMatch) {
+                // Prefer text match with good confidence over pixel match
+                if (bestMatch.confidence >= pixelMatch.confidence) {
+                    match = bestMatch;
+                    method = bestCharset + ' fuzzy(s=' + bestScore + ')';
+                } else {
+                    match = pixelMatch;
+                    method = 'pixel';
+                }
+            } else if (bestMatch) {
+                match = bestMatch;
+                method = bestCharset + ' fuzzy(s=' + bestScore + ')';
+            } else if (pixelMatch) {
+                match = pixelMatch;
+                method = 'pixel';
+            }
+
+            if (bestTargetCodes) {
+                debug(bestCharset + ': ' + bestTargetCodes.join(' '));
             }
 
             var elapsed = Math.round(performance.now() - t0);
             debug('Time: ' + elapsed + 'ms');
 
             if (match) {
-                debug('MATCH R' + match.row + ' C' + match.col + ' conf=' + Math.round(match.confidence * 100) + '%');
+                debug(method + ' R' + match.row + 'C' + match.col + ' conf=' + Math.round(match.confidence * 100) + '%');
                 if (match.top3) {
                     for (var di = 0; di < match.top3.length; di++) {
-                        var m = match.top3[di];
-                        debug('  #' + (di + 1) + ' R' + m.row + 'C' + m.col + ' s=' + m.score.toFixed(3));
+                        var mt = match.top3[di];
+                        debug('  #' + (di + 1) + ' R' + mt.row + 'C' + mt.col + ' s=' + mt.score.toFixed(3));
                     }
                 }
                 drawResult(det, match.position, extracted.targetCells.length);
@@ -157,7 +209,7 @@ const App = (() => {
                 positionEl.style.display = 'block';
                 setStatus('tracking', 'Row ' + match.row + ', Col ' + match.col);
             } else {
-                debug('NO MATCH');
+                debug('NO MATCH (all strategies failed)');
                 setStatus('error', 'No match found');
             }
         } catch (err) {

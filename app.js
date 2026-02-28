@@ -92,6 +92,11 @@ const App = (() => {
         debugClear();
         btnStart.disabled = true;
 
+        // Use setTimeout so the "Scanning..." text renders before heavy work
+        setTimeout(doScan, 30);
+    }
+
+    function doScan() {
         try {
             var t0 = performance.now();
 
@@ -101,7 +106,6 @@ const App = (() => {
                 debug('Templates: ' + Math.round(performance.now() - t0) + 'ms');
             }
 
-            // 1. Capture single frame
             var frame = Camera.captureFrame();
             if (!frame) {
                 setStatus('error', 'No frame');
@@ -109,7 +113,6 @@ const App = (() => {
             }
             debug('Frame: ' + frame.width + 'x' + frame.height);
 
-            // 2. Detect grid (once)
             var det = Detector.detect(frame);
             if (!det) {
                 setStatus('error', 'Grid not found');
@@ -125,25 +128,20 @@ const App = (() => {
                 return;
             }
 
-            // 3. Extract cells (once)
+            // Extract cells (once)
             var extracted = Processor.extractAllCells(frame, det.gridCells, det.targetCells);
 
-            // 4. Split all cells into halves (once, reused across all charset attempts)
-            var targetHalvesArr = [];
-            var sampleHalves = [];
+            // Split all cells into halves ONCE (reused across all charset attempts)
+            var targetHalves = [];
             for (var i = 0; i < extracted.targetCells.length; i++) {
-                var h = Processor.splitCellHalves(extracted.targetCells[i]);
-                targetHalvesArr.push(h);
-                sampleHalves.push(h.left);
-                sampleHalves.push(h.right);
+                targetHalves.push(Processor.splitCellHalves(extracted.targetCells[i]));
             }
-
-            var gridHalvesArr = [];
+            var gridHalves = [];
             for (var gi = 0; gi < extracted.gridCells.length; gi++) {
-                gridHalvesArr.push(Processor.splitCellHalves(extracted.gridCells[gi]));
+                gridHalves.push(Processor.splitCellHalves(extracted.gridCells[gi]));
             }
 
-            // 5. Multi-strategy matching: try ALL charsets + pixel matching
+            // Multi-strategy: try ALL charsets using pre-computed halves
             var allCharsets = Templates.getAllCharsets();
             var charsetNames = Object.keys(allCharsets);
             var bestMatch = null;
@@ -156,16 +154,19 @@ const App = (() => {
                 var csName = charsetNames[ci];
                 var tpls = allCharsets[csName];
 
-                // Identify target codes
+                // Identify codes using pre-split halves (no canvas creation)
                 var tCodes = [];
-                for (var ti = 0; ti < extracted.targetCells.length; ti++) {
-                    tCodes.push(Matcher.identifyCode(extracted.targetCells[ti], tpls));
+                for (var ti = 0; ti < targetHalves.length; ti++) {
+                    var lc = Matcher.identifyChar(targetHalves[ti].left, tpls);
+                    var rc = Matcher.identifyChar(targetHalves[ti].right, tpls);
+                    tCodes.push(lc.char + rc.char);
                 }
 
-                // Identify grid codes
                 var gCodes = [];
-                for (var gj = 0; gj < extracted.gridCells.length; gj++) {
-                    gCodes.push(Matcher.identifyCode(extracted.gridCells[gj], tpls));
+                for (var gj = 0; gj < gridHalves.length; gj++) {
+                    var glc = Matcher.identifyChar(gridHalves[gj].left, tpls);
+                    var grc = Matcher.identifyChar(gridHalves[gj].right, tpls);
+                    gCodes.push(glc.char + grc.char);
                 }
 
                 var m = Matcher.findMatchByText(tCodes, gCodes);
@@ -181,8 +182,7 @@ const App = (() => {
             // Also try pixel matching
             var pixelMatch = Matcher.findMatch(extracted.targetCells, extracted.gridCells);
 
-            // Pick winner: exact text match (score=0) wins, otherwise best fuzzy,
-            // pixel match as last resort
+            // Pick winner
             var match = null;
             var method = '';
 
@@ -190,7 +190,6 @@ const App = (() => {
                 match = bestMatch;
                 method = bestCharset + ' exact';
             } else if (bestMatch && pixelMatch) {
-                // Prefer text match with good confidence over pixel match
                 if (bestMatch.confidence >= pixelMatch.confidence) {
                     match = bestMatch;
                     method = bestCharset + ' fuzzy(s=' + bestScore + ')';
@@ -230,7 +229,7 @@ const App = (() => {
                 setStatus('error', 'No match found');
             }
 
-            // Visual debug: show extracted cells vs templates
+            // Visual debug
             drawDebugCells(
                 extracted.targetCells, extracted.gridCells,
                 bestTargetCodes, bestGridCodes, bestCharset

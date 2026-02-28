@@ -17,16 +17,16 @@
                 keys.forEach(function(k) { caches.delete(k); });
             });
         }
+        var _v = Date.now();
         (function() {
-            var v = Date.now();
             var css = document.createElement('link');
             css.rel = 'stylesheet';
-            css.href = 'style.css?' + v;
+            css.href = 'style.css?' + _v;
             document.head.appendChild(css);
             var files = ['camera.js','detector.js','processor.js','templates.js','matcher.js','app.js'];
             for (var i = 0; i < files.length; i++) {
                 var el = document.createElement('script');
-                el.src = files[i] + '?' + v;
+                el.src = files[i] + '?' + _v;
                 el.async = false;
                 document.head.appendChild(el);
             }
@@ -44,7 +44,8 @@
         </div>
 
         <div id="debug"></div>
-        <div id="version">v18</div>
+        <div id="version"></div>
+        <div id="toast"></div>
         <div id="position"></div>
 
         <div id="controls">
@@ -52,5 +53,15 @@
             <button id="btnStop" class="hidden">STOP</button>
         </div>
     </div>
+    <script>
+        (function() {
+            var tag = 'v.' + String(_v).slice(-5);
+            document.getElementById('version').textContent = tag;
+            var t = document.getElementById('toast');
+            t.textContent = 'Loaded ' + tag;
+            t.className = 'show';
+            setTimeout(function() { t.className = ''; }, 2500);
+        })();
+    </script>
 </body>
 </html>

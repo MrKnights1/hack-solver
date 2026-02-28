@@ -4,50 +4,32 @@
 // Ground-truth tests using real game screenshot data.
 // Each test case contains the exact grid + target codes read
 // from actual phone camera screenshots of the hacking minigame.
-// The new Function() calls below load our own project source files
-// (matcher.js, ocr.js) - no untrusted input is involved.
+// The new Function() call below loads our own project source file
+// (matcher.js) - no untrusted input is involved.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-// These load our own source files using Function constructor to
-// evaluate the IIFE modules in a Node.js environment with minimal
-// DOM stubs. No user input is involved - only trusted local files.
+// Load our own source file using Function constructor to evaluate
+// the IIFE module in Node.js. No user input is involved.
 
 function loadMatcher() {
     const src = fs.readFileSync(path.join(__dirname, '..', 'matcher.js'), 'utf-8');
-    const loader = new Function(src + '\nreturn Matcher;');
-    return loader();
-}
-
-function loadOCR() {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'ocr.js'), 'utf-8');
-    const mockCtx = {
-        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
-        putImageData: () => {},
-        drawImage: () => {},
-        getImageData: () => ({ data: new Uint8ClampedArray(0) }),
-        clearRect: () => {},
-        set imageSmoothingEnabled(_) {},
-        set imageSmoothingQuality(_) {},
+    // eslint-disable-next-line no-new-func -- loading own trusted source file
+    const loader = new Function('Processor', src + '\nreturn Matcher;');
+    const stubProcessor = {
+        splitCellHalves: () => ({ left: new Uint8Array(1024), right: new Uint8Array(1024) })
     };
-    const mockDoc = {
-        createElement: () => ({ width: 0, height: 0, getContext: () => mockCtx })
-    };
-    const mockTesseract = { createWorker: async () => ({}) };
-    const loader = new Function('document', 'Tesseract', src + '\nreturn OCR;');
-    return loader(mockDoc, mockTesseract);
+    return loader(stubProcessor);
 }
 
 const Matcher = loadMatcher();
-const OCR = loadOCR();
 
 // ===== Ground Truth Data =====
 // Each entry: { name, charset, target, grid (80 codes), expectedPos, expectedRow, expectedCol }
 // Grid is read left-to-right, top-to-bottom from the screenshot.
-// Red cells in screenshots are random hiding, NOT the answer.
 
 const GROUND_TRUTH = [
     {
@@ -232,39 +214,9 @@ describe('Ground truth: exact matching on real screenshot data', () => {
     }
 });
 
-// ===== Greek Normalized Matching on Real Data =====
+// ===== Fuzzy Matching on Real Data (Simulated Errors) =====
 
-describe('Ground truth: Greek normalization on real screenshot data', () => {
-    const greekGT = GROUND_TRUTH.find(g => g.charset === 'greek');
-
-    it('normalizes Greek target codes', () => {
-        const norm = OCR.normalizeCodes(greekGT.target);
-        for (const code of norm) {
-            assert.equal(code.length, 2, `code "${code}" should be 2 chars`);
-        }
-    });
-
-    it('finds Greek match after normalization', () => {
-        const normTarget = OCR.normalizeCodes(greekGT.target);
-        const normGrid = OCR.normalizeCodes(greekGT.grid);
-        const match = Matcher.findMatchByText(normTarget, normGrid);
-        assert.ok(match, 'should find match after normalization');
-        assert.equal(match.position, greekGT.expectedPos);
-    });
-
-    it('matches even if OCR reads some Greek chars as Latin', () => {
-        const mixedTarget = ['BX', '\u039B\u03A6', 'P\u03A9', 'K\u03A9'];
-        const normTarget = OCR.normalizeCodes(mixedTarget);
-        const normGrid = OCR.normalizeCodes(greekGT.grid);
-        const match = Matcher.findMatchByText(normTarget, normGrid);
-        assert.ok(match, 'should find match with mixed Latin/Greek target');
-        assert.equal(match.position, greekGT.expectedPos);
-    });
-});
-
-// ===== Fuzzy Matching on Real Data (Simulated OCR Errors) =====
-
-describe('Ground truth: fuzzy matching with simulated OCR errors', () => {
+describe('Ground truth: fuzzy matching with simulated errors', () => {
     it('numeric: one digit wrong', () => {
         const gt = GROUND_TRUTH[0];
         const fuzzyTarget = ['28', '98', '94', '56'];

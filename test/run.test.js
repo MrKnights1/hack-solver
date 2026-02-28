@@ -1,48 +1,33 @@
 #!/usr/bin/env node
 'use strict';
 
-// Test suite for hack-solver parsing and matching logic.
+// Test suite for hack-solver matching logic.
 // Uses Node.js built-in test runner.
 // The new Function() calls below load our own project source files
-// (matcher.js, ocr.js) - no untrusted input is involved.
+// (matcher.js) - no untrusted input is involved.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-// ===== Load Modules =====
-// These load our own source files using Function constructor to
-// evaluate the IIFE modules in a Node.js environment with minimal
-// DOM stubs. No user input is involved - only trusted local files.
+// ===== Load Matcher Module =====
+// Loads our own source file using Function constructor to evaluate
+// the IIFE module in Node.js. No user input is involved - only
+// trusted local files.
 
 function loadMatcher() {
     const src = fs.readFileSync(path.join(__dirname, '..', 'matcher.js'), 'utf-8');
-    const loader = new Function(src + '\nreturn Matcher;');
-    return loader();
-}
-
-function loadOCR() {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'ocr.js'), 'utf-8');
-    const mockCtx = {
-        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
-        putImageData: () => {},
-        drawImage: () => {},
-        getImageData: () => ({ data: new Uint8ClampedArray(0) }),
-        clearRect: () => {},
-        set imageSmoothingEnabled(_) {},
-        set imageSmoothingQuality(_) {},
+    // eslint-disable-next-line no-new-func -- loading own trusted source file
+    const loader = new Function('Processor', src + '\nreturn Matcher;');
+    // Provide stub Processor since matcher.js references it for identifyCode
+    const stubProcessor = {
+        splitCellHalves: () => ({ left: new Uint8Array(1024), right: new Uint8Array(1024) })
     };
-    const mockDoc = {
-        createElement: () => ({ width: 0, height: 0, getContext: () => mockCtx })
-    };
-    const mockTesseract = { createWorker: async () => ({}) };
-    const loader = new Function('document', 'Tesseract', src + '\nreturn OCR;');
-    return loader(mockDoc, mockTesseract);
+    return loader(stubProcessor);
 }
 
 const Matcher = loadMatcher();
-const OCR = loadOCR();
 
 // ===== Character Pools =====
 
@@ -119,14 +104,6 @@ function makeGrid(pool, target, targetPos) {
     return grid;
 }
 
-function gridToRowTexts(grid, cols) {
-    const rows = [];
-    for (let r = 0; r < grid.length / cols; r++) {
-        rows.push(grid.slice(r * cols, r * cols + cols).join(' '));
-    }
-    return rows;
-}
-
 // ===== Charset Test Generator =====
 
 function runCharsetTests(name, poolFn, target, fuzzyTarget) {
@@ -166,7 +143,7 @@ function runCharsetTests(name, poolFn, target, fuzzyTarget) {
             assert.equal(match.confidence, 1);
         });
 
-        it('fuzzy match with OCR error', () => {
+        it('fuzzy match with character error', () => {
             const grid = makeGrid(pool, target, 45);
             const match = Matcher.findMatchByText(fuzzyTarget, grid);
             assert.ok(match, 'should find a fuzzy match');
@@ -175,27 +152,10 @@ function runCharsetTests(name, poolFn, target, fuzzyTarget) {
             assert.equal(match.col, 6);
             assert.ok(match.score > 0 && match.score <= 3, 'score ' + match.score + ' should be 0 < s <= 3');
         });
-
-        it('parse row text and match', () => {
-            const grid = makeGrid(pool, target, 20);
-            const rowTexts = gridToRowTexts(grid, 10);
-            const parsed = [];
-            for (const rowText of rowTexts) {
-                const codes = OCR.parseRowCodes(rowText, 10);
-                assert.equal(codes.length, 10, 'row should parse to 10 codes, got ' + codes.length + ': "' + rowText + '"');
-                parsed.push(...codes);
-            }
-            assert.equal(parsed.length, 80);
-            const match = Matcher.findMatchByText(target, parsed);
-            assert.ok(match, 'should find match after parsing');
-            assert.equal(match.position, 20);
-            assert.equal(match.row, 3);
-            assert.equal(match.col, 1);
-        });
     });
 }
 
-// ===== 6 Charset Suites (5 tests each = 30 tests) =====
+// ===== 6 Charset Suites (4 tests each = 24 tests) =====
 
 runCharsetTests(
     'Numeric',
@@ -238,210 +198,6 @@ runCharsetTests(
     ['\u16A0\u16A6', '\u16B7\u16BA', '\u16C7\u16CA', '\u16D6\u16DA'],
     ['\u16A0\u16A6', '\u16B7', '\u16C7\u16CA', '\u16D6\u16DA']
 );
-
-// ===== parseTargetCodes Tests =====
-
-describe('parseTargetCodes', () => {
-    it('parses space-separated numeric target', () => {
-        const codes = OCR.parseTargetCodes('58 38 69 61');
-        assert.deepEqual(codes, ['58', '38', '69', '61']);
-    });
-
-    it('parses multi-line text with header', () => {
-        const codes = OCR.parseTargetCodes('CONNECTING TO THE HOST\n58 38 69 61');
-        assert.deepEqual(codes, ['58', '38', '69', '61']);
-    });
-
-    it('parses concatenated 8-digit string', () => {
-        const codes = OCR.parseTargetCodes('58386961');
-        assert.deepEqual(codes, ['58', '38', '69', '61']);
-    });
-
-    it('parses Greek target codes', () => {
-        const codes = OCR.parseTargetCodes('\u0395\u0394 \u03A1\u039C \u0398\u0393 \u0395\u039F');
-        assert.deepEqual(codes, ['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393', '\u0395\u039F']);
-    });
-
-    it('parses Braille target codes', () => {
-        const codes = OCR.parseTargetCodes('\u2801\u2809 \u281B\u2813 \u280F\u281F \u280E\u281E');
-        assert.deepEqual(codes, ['\u2801\u2809', '\u281B\u2813', '\u280F\u281F', '\u280E\u281E']);
-    });
-});
-
-// ===== parseRowCodes Edge Cases =====
-
-describe('parseRowCodes edge cases', () => {
-    it('handles concatenated digits (no spaces)', () => {
-        const codes = OCR.parseRowCodes('58386961421573802954', 10);
-        assert.equal(codes.length, 10);
-        assert.equal(codes[0], '58');
-        assert.equal(codes[3], '61');
-    });
-
-    it('handles off-by-one extra char', () => {
-        const codes = OCR.parseRowCodes('583869614215738029541', 10);
-        assert.equal(codes.length, 10);
-        assert.equal(codes[0], '58');
-    });
-
-    it('merges split single characters', () => {
-        const codes = OCR.parseRowCodes('F N K W Q D B X A C', 5);
-        assert.equal(codes.length, 5);
-        assert.equal(codes[0], 'FN');
-        assert.equal(codes[1], 'KW');
-    });
-
-    it('handles Rune row text', () => {
-        const text = '\u16A0\u16A2 \u16A6\u16A8 \u16B1\u16B2 \u16B7\u16B9 \u16BA\u16BE \u16C1\u16C3 \u16C7\u16C8 \u16C9\u16CA \u16CB\u16CF \u16D2\u16D6';
-        const codes = OCR.parseRowCodes(text, 10);
-        assert.equal(codes.length, 10);
-        assert.equal(codes[0], '\u16A0\u16A2');
-        assert.equal(codes[9], '\u16D2\u16D6');
-    });
-
-    it('handles concatenated Greek text', () => {
-        const codes = OCR.parseRowCodes('\u0395\u0394\u03A1\u039C\u0398\u0393\u0395\u039F\u0391\u0392\u0393\u0394\u0396\u0397\u0398\u0399\u039A\u039B\u039C\u039D', 10);
-        assert.equal(codes.length, 10);
-        assert.equal(codes[0], '\u0395\u0394');
-        assert.equal(codes[1], '\u03A1\u039C');
-    });
-});
-
-// ===== normalizeText Tests =====
-
-describe('normalizeText', () => {
-    it('maps Greek look-alike uppercase to Latin', () => {
-        assert.equal(OCR.normalizeText('\u0391\u0392\u0395\u0396'), 'ABEZ');
-    });
-
-    it('maps Greek look-alike lowercase to Latin uppercase', () => {
-        assert.equal(OCR.normalizeText('\u03B1\u03B2\u03B5\u03B6'), 'ABEZ');
-    });
-
-    it('keeps unique Greek chars as uppercase', () => {
-        assert.equal(OCR.normalizeText('\u0393\u0394\u0398\u03A3'), '\u0393\u0394\u0398\u03A3');
-    });
-
-    it('uppercases Latin text', () => {
-        assert.equal(OCR.normalizeText('abCD'), 'ABCD');
-    });
-
-    it('leaves digits unchanged', () => {
-        assert.equal(OCR.normalizeText('5838'), '5838');
-    });
-});
-
-// ===== normalizeCodes Tests =====
-
-describe('normalizeCodes', () => {
-    it('normalizes Greek codes to consistent form', () => {
-        const codes = ['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393', '\u0395\u039F'];
-        const norm = OCR.normalizeCodes(codes);
-        assert.deepEqual(norm, ['E\u0394', 'PM', '\u0398\u0393', 'EO']);
-    });
-
-    it('no-op for pure Latin codes', () => {
-        const codes = ['FN', 'KW', 'QD', 'BX'];
-        assert.deepEqual(OCR.normalizeCodes(codes), ['FN', 'KW', 'QD', 'BX']);
-    });
-
-    it('no-op for numeric codes', () => {
-        const codes = ['58', '38', '69', '61'];
-        assert.deepEqual(OCR.normalizeCodes(codes), ['58', '38', '69', '61']);
-    });
-
-    it('handles mixed Greek/Latin OCR output consistently', () => {
-        const greekForm = OCR.normalizeCodes(['\u0395\u0394']);
-        const latinForm = OCR.normalizeCodes(['E\u0394']);
-        assert.deepEqual(greekForm, latinForm);
-    });
-
-    it('normalizes Braille and Rune codes unchanged', () => {
-        const braille = ['\u2801\u2809', '\u281B\u2813'];
-        assert.deepEqual(OCR.normalizeCodes(braille), ['\u2801\u2809', '\u281B\u2813']);
-        const runes = ['\u16A0\u16A6', '\u16B7\u16BA'];
-        assert.deepEqual(OCR.normalizeCodes(runes), ['\u16A0\u16A6', '\u16B7\u16BA']);
-    });
-});
-
-// ===== guessWhitelist Tests =====
-
-describe('guessWhitelist', () => {
-    it('returns digits for numeric codes', () => {
-        const wl = OCR.guessWhitelist(['58', '38', '69', '61']);
-        assert.equal(wl, '0123456789');
-    });
-
-    it('returns Latin for alpha codes', () => {
-        const wl = OCR.guessWhitelist(['FN', 'KW', 'QD', 'BX']);
-        assert.equal(wl, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ');
-    });
-
-    it('returns Latin+digits for alphanum codes', () => {
-        const wl = OCR.guessWhitelist(['A5', 'C7', 'F1', 'H4']);
-        assert.equal(wl, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
-    });
-
-    it('returns Latin+Greek for Greek codes', () => {
-        const wl = OCR.guessWhitelist(['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393']);
-        assert.ok(wl.includes('A'));
-        assert.ok(wl.includes('\u0391'));
-    });
-
-    it('returns empty for unknown charset', () => {
-        const wl = OCR.guessWhitelist(['\u2801\u2809']);
-        assert.equal(wl, '');
-    });
-});
-
-// ===== Greek normalized matching =====
-
-describe('Greek normalized matching', () => {
-    it('matches Greek target against Greek grid after normalization', () => {
-        const greekTarget = ['\u0395\u0394', '\u03A1\u039C', '\u0398\u0393', '\u0395\u039F'];
-        const greekGrid = greekPool().slice(0, 80);
-        greekGrid[25] = '\u0395\u0394';
-        greekGrid[26] = '\u03A1\u039C';
-        greekGrid[27] = '\u0398\u0393';
-        greekGrid[28] = '\u0395\u039F';
-
-        const normTarget = OCR.normalizeCodes(greekTarget);
-        const normGrid = OCR.normalizeCodes(greekGrid);
-        const match = Matcher.findMatchByText(normTarget, normGrid);
-        assert.ok(match, 'should find match after normalization');
-        assert.equal(match.position, 25);
-    });
-
-    it('matches when OCR reads Greek as mixed Latin/Greek', () => {
-        const ocrTarget = ['E\u0394', 'P\u039C', '\u0398\u0393', 'EO'];
-        const ocrGrid = [];
-        for (let i = 0; i < 80; i++) ocrGrid.push('XX');
-        ocrGrid[40] = '\u0395\u0394';
-        ocrGrid[41] = '\u03A1\u039C';
-        ocrGrid[42] = '\u0398\u0393';
-        ocrGrid[43] = '\u0395\u039F';
-
-        const normTarget = OCR.normalizeCodes(ocrTarget);
-        const normGrid = OCR.normalizeCodes(ocrGrid);
-        const match = Matcher.findMatchByText(normTarget, normGrid);
-        assert.ok(match, 'should find match despite mixed Latin/Greek');
-        assert.equal(match.position, 40);
-    });
-
-    it('matches when grid reads as Latin but target reads as Greek', () => {
-        const greekTarget = ['\u0395\u0394', '\u03A1\u039C'];
-        const latinGrid = [];
-        for (let i = 0; i < 80; i++) latinGrid.push('XX');
-        latinGrid[10] = 'E\u0394';
-        latinGrid[11] = 'P\u039C';
-
-        const normTarget = OCR.normalizeCodes(greekTarget);
-        const normGrid = OCR.normalizeCodes(latinGrid);
-        const match = Matcher.findMatchByText(normTarget, normGrid);
-        assert.ok(match, 'should find match across Greek/Latin mismatch');
-        assert.equal(match.position, 10);
-    });
-});
 
 // ===== Matcher Edge Cases =====
 
@@ -488,5 +244,50 @@ describe('Matcher edge cases', () => {
         assert.ok(match, 'should find fuzzy match');
         assert.equal(match.position, 50);
         assert.ok(match.score <= 3);
+    });
+});
+
+// ===== Hamming Distance Tests =====
+
+describe('Hamming distance', () => {
+    it('identical arrays return 0', () => {
+        const a = new Uint8Array([0, 255, 0, 255]);
+        assert.equal(Matcher.hammingDist(a, a), 0);
+    });
+
+    it('completely different arrays return 1', () => {
+        const a = new Uint8Array([0, 0, 0, 0]);
+        const b = new Uint8Array([255, 255, 255, 255]);
+        assert.equal(Matcher.hammingDist(a, b), 1);
+    });
+
+    it('half-different arrays return 0.5', () => {
+        const a = new Uint8Array([0, 0, 255, 255]);
+        const b = new Uint8Array([0, 0, 0, 0]);
+        assert.equal(Matcher.hammingDist(a, b), 0.5);
+    });
+
+    it('different lengths return 1', () => {
+        const a = new Uint8Array([0, 0]);
+        const b = new Uint8Array([0, 0, 0]);
+        assert.equal(Matcher.hammingDist(a, b), 1);
+    });
+});
+
+// ===== toBinary Tests =====
+
+describe('toBinary', () => {
+    it('thresholds at midpoint', () => {
+        const input = new Uint8Array([0, 50, 100, 150, 200, 255]);
+        const result = Matcher.toBinary(input);
+        // midpoint = (0 + 255) / 2 = 127.5
+        assert.deepEqual(Array.from(result), [0, 0, 0, 255, 255, 255]);
+    });
+
+    it('uniform array stays same', () => {
+        const input = new Uint8Array([128, 128, 128]);
+        const result = Matcher.toBinary(input);
+        // midpoint = 128, values equal to threshold go to 0
+        assert.deepEqual(Array.from(result), [0, 0, 0]);
     });
 });

@@ -11,7 +11,7 @@ const App = (() => {
     const btnStop = document.getElementById('btnStop');
 
     let cameraRunning = false;
-    let ocrReady = false;
+    let templatesReady = false;
     let debugLines = [];
 
     function init() {
@@ -28,7 +28,6 @@ const App = (() => {
         overlayCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
     }
 
-    // Debug output uses textContent with newlines, safe from XSS
     function debug(msg) {
         debugLines.push(msg);
         debugEl.textContent = debugLines.join('\n');
@@ -53,18 +52,11 @@ const App = (() => {
         btnStart.textContent = 'SCAN';
         btnStop.classList.remove('hidden');
 
-        if (!ocrReady) {
-            setStatus('detecting', 'Loading OCR...');
-            debug('Loading Tesseract...');
-            try {
-                await OCR.init();
-                ocrReady = true;
-                debug('OCR ready');
-            } catch (err) {
-                setStatus('error', 'OCR failed to load');
-                debug('OCR error: ' + err.message);
-                return;
-            }
+        if (!templatesReady) {
+            setStatus('detecting', 'Generating templates...');
+            Templates.generate();
+            templatesReady = true;
+            debug('Templates ready');
         }
 
         scan();
@@ -86,7 +78,7 @@ const App = (() => {
         statusText.textContent = message;
     }
 
-    async function scan() {
+    function scan() {
         setStatus('detecting', 'Scanning...');
         clearOverlay();
         positionEl.style.display = 'none';
@@ -94,10 +86,11 @@ const App = (() => {
         btnStart.disabled = true;
 
         try {
+            var t0 = performance.now();
+
             var frame = Camera.captureFrame();
             if (!frame) {
                 setStatus('error', 'No frame');
-                debug('captureFrame null');
                 return;
             }
             debug('Frame: ' + frame.width + 'x' + frame.height);
@@ -106,7 +99,6 @@ const App = (() => {
             var det = Detector.detect(frame);
             if (!det) {
                 setStatus('error', 'Grid not found');
-                debug('Detector returned null');
                 return;
             }
 
@@ -119,48 +111,51 @@ const App = (() => {
                 return;
             }
 
-            // Step 2: OCR target
-            setStatus('detecting', 'Reading target...');
-            var targetCodes = await OCR.ocrTarget(frame, det);
-            if (!targetCodes || targetCodes.length < 2) {
-                debug('Target OCR failed');
-                setStatus('error', 'Cannot read target');
-                return;
+            // Step 2: Extract all cells
+            var extracted = Processor.extractAllCells(frame, det.gridCells, det.targetCells);
+
+            // Step 3: Detect charset from target cells
+            var targetHalves = [];
+            for (var i = 0; i < extracted.targetCells.length; i++) {
+                var h = Processor.splitCellHalves(extracted.targetCells[i]);
+                targetHalves.push(h.left);
+                targetHalves.push(h.right);
+            }
+            var charset = Matcher.detectCharset(targetHalves, Templates.getAllCharsets());
+            var templates = Templates.getCharset(charset);
+            debug('Charset: ' + charset);
+
+            // Step 4: Identify all codes
+            var targetCodes = [];
+            for (var t = 0; t < extracted.targetCells.length; t++) {
+                targetCodes.push(Matcher.identifyCode(extracted.targetCells[t], templates));
             }
             debug('Target: ' + targetCodes.join(' '));
 
-            // Step 3: Whitelist
-            var wl = OCR.guessWhitelist(targetCodes);
-            debug('Whitelist: ' + (wl || '(none)'));
-
-            // Step 4: OCR grid (row by row with binarization fallback)
-            setStatus('detecting', 'Reading grid...');
-            var gridCodes = await OCR.ocrGrid(frame, det, wl);
-
-            if (!gridCodes) {
-                debug('Grid OCR failed');
-                setStatus('error', 'Cannot read grid');
-                return;
+            var gridCodes = [];
+            for (var g = 0; g < extracted.gridCells.length; g++) {
+                gridCodes.push(Matcher.identifyCode(extracted.gridCells[g], templates));
             }
 
-            debug('Grid: ' + gridCodes.length + ' codes');
+            // Step 5: Find match
+            var match = Matcher.findMatchByText(targetCodes, gridCodes);
 
-            // Step 5: Normalize and match
-            var normTarget = OCR.normalizeCodes(targetCodes);
-            var normGrid = OCR.normalizeCodes(gridCodes);
+            var elapsed = Math.round(performance.now() - t0);
+            debug('Time: ' + elapsed + 'ms');
 
-            var match = Matcher.findMatchByText(normTarget, normGrid);
             if (match) {
                 debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%)');
-                drawResult(det, match.position, normTarget.length);
+                drawResult(det, match.position, targetCodes.length);
                 positionEl.textContent = 'R' + match.row + ' C' + match.col;
                 positionEl.style.display = 'block';
                 setStatus('tracking', 'Row ' + match.row + ', Col ' + match.col);
             } else {
                 debug('NO MATCH');
-                debug('Target: ' + normTarget.join(' '));
-                for (var r = 0; r < 8; r++) {
-                    debug('R' + (r + 1) + ': ' + normGrid.slice(r * 10, r * 10 + 10).join(' '));
+                debug('Target: ' + targetCodes.join(' '));
+                var cols = det.cols || 10;
+                var rows = Math.ceil(gridCodes.length / cols);
+                for (var r = 0; r < rows; r++) {
+                    debug('R' + (r + 1) + ': ' + gridCodes.slice(r * cols, r * cols + cols).join(' '));
                 }
                 setStatus('error', 'No match found');
             }

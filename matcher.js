@@ -215,5 +215,63 @@ const Matcher = (() => {
         return null;
     }
 
-    return { findMatch, findMatchByText, ncc, hammingDist };
+    /**
+     * Identify a single character by matching a half-cell against charset templates.
+     * Returns { char, distance } for the best match.
+     */
+    function identifyChar(halfPixels, charsetTemplates) {
+        const halfBin = toBinary(halfPixels);
+        let bestChar = '?';
+        let bestDist = 1;
+
+        for (let i = 0; i < charsetTemplates.length; i++) {
+            const tplBin = toBinary(charsetTemplates[i].pixels);
+            const dist = hammingDist(halfBin, tplBin);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestChar = charsetTemplates[i].char;
+            }
+        }
+
+        return { char: bestChar, distance: bestDist };
+    }
+
+    /**
+     * Identify a 2-character code from a full cell.
+     * Splits the cell into left/right halves and identifies each.
+     */
+    function identifyCode(cellPixels, charsetTemplates) {
+        const halves = Processor.splitCellHalves(cellPixels);
+        const left = identifyChar(halves.left, charsetTemplates);
+        const right = identifyChar(halves.right, charsetTemplates);
+        return left.char + right.char;
+    }
+
+    /**
+     * Detect which charset best matches sample half-cells.
+     * allCharsets: { numeric: [{char, pixels}...], alphabet: [...], ... }
+     */
+    function detectCharset(sampleHalves, allCharsets) {
+        let bestName = 'numeric';
+        let bestScore = Infinity;
+
+        const names = Object.keys(allCharsets);
+        for (let n = 0; n < names.length; n++) {
+            const templates = allCharsets[names[n]];
+            let totalDist = 0;
+            for (let s = 0; s < sampleHalves.length; s++) {
+                const result = identifyChar(sampleHalves[s], templates);
+                totalDist += result.distance;
+            }
+            const avgDist = totalDist / sampleHalves.length;
+            if (avgDist < bestScore) {
+                bestScore = avgDist;
+                bestName = names[n];
+            }
+        }
+
+        return bestName;
+    }
+
+    return { findMatch, findMatchByText, identifyChar, identifyCode, detectCharset, ncc, hammingDist, toBinary };
 })();

@@ -133,5 +133,107 @@ const Processor = (() => {
         return { gridCells, targetCells };
     }
 
-    return { extractCell, extractAllCells, CELL_SIZE };
+    /**
+     * Split a 32×32 cell containing 2 characters into left and right halves.
+     * Each half is tight-cropped and stretched to 32×32 with contrast normalization.
+     */
+    function splitCellHalves(cellPixels) {
+        const halfW = CELL_SIZE / 2;
+        const halves = [];
+
+        for (let side = 0; side < 2; side++) {
+            const startX = side * halfW;
+
+            // Extract half region
+            const halfGray = new Uint8Array(halfW * CELL_SIZE);
+            for (let y = 0; y < CELL_SIZE; y++) {
+                for (let x = 0; x < halfW; x++) {
+                    halfGray[y * halfW + x] = cellPixels[y * CELL_SIZE + startX + x];
+                }
+            }
+
+            // Tight crop
+            let minVal = 255, maxVal = 0;
+            for (let i = 0; i < halfGray.length; i++) {
+                if (halfGray[i] < minVal) minVal = halfGray[i];
+                if (halfGray[i] > maxVal) maxVal = halfGray[i];
+            }
+            const threshold = (minVal + maxVal) / 2;
+
+            let tMinX = halfW, tMaxX = 0, tMinY = CELL_SIZE, tMaxY = 0;
+            let hasText = false;
+            for (let y = 0; y < CELL_SIZE; y++) {
+                for (let x = 0; x < halfW; x++) {
+                    if (halfGray[y * halfW + x] > threshold) {
+                        hasText = true;
+                        if (x < tMinX) tMinX = x;
+                        if (x > tMaxX) tMaxX = x;
+                        if (y < tMinY) tMinY = y;
+                        if (y > tMaxY) tMaxY = y;
+                    }
+                }
+            }
+
+            if (!hasText) {
+                tMinX = 0; tMaxX = halfW - 1;
+                tMinY = 0; tMaxY = CELL_SIZE - 1;
+            }
+
+            const margin = Math.max(1, Math.round(Math.min(tMaxX - tMinX, tMaxY - tMinY) * 0.1));
+            tMinX = Math.max(0, tMinX - margin);
+            tMaxX = Math.min(halfW - 1, tMaxX + margin);
+            tMinY = Math.max(0, tMinY - margin);
+            tMaxY = Math.min(CELL_SIZE - 1, tMaxY + margin);
+
+            const cropW = tMaxX - tMinX + 1;
+            const cropH = tMaxY - tMinY + 1;
+
+            // Draw cropped half to canvas, scale to CELL_SIZE
+            const srcCanvas = document.createElement('canvas');
+            srcCanvas.width = cropW;
+            srcCanvas.height = cropH;
+            const srcCtx = srcCanvas.getContext('2d');
+            const cropData = srcCtx.createImageData(cropW, cropH);
+
+            for (let y = 0; y < cropH; y++) {
+                for (let x = 0; x < cropW; x++) {
+                    const g = halfGray[(tMinY + y) * halfW + (tMinX + x)];
+                    const dstIdx = (y * cropW + x) * 4;
+                    cropData.data[dstIdx] = g;
+                    cropData.data[dstIdx + 1] = g;
+                    cropData.data[dstIdx + 2] = g;
+                    cropData.data[dstIdx + 3] = 255;
+                }
+            }
+            srcCtx.putImageData(cropData, 0, 0);
+
+            const { canvas, ctx } = getCanvas();
+            canvas.width = CELL_SIZE;
+            canvas.height = CELL_SIZE;
+            ctx.drawImage(srcCanvas, 0, 0, cropW, cropH, 0, 0, CELL_SIZE, CELL_SIZE);
+            const scaled = ctx.getImageData(0, 0, CELL_SIZE, CELL_SIZE);
+
+            const result = new Uint8Array(CELL_SIZE * CELL_SIZE);
+            let gMin = 255, gMax = 0;
+            for (let i = 0; i < result.length; i++) {
+                const v = scaled.data[i * 4];
+                result[i] = v;
+                if (v < gMin) gMin = v;
+                if (v > gMax) gMax = v;
+            }
+
+            const range = gMax - gMin;
+            if (range > 10) {
+                for (let i = 0; i < result.length; i++) {
+                    result[i] = Math.round(((result[i] - gMin) / range) * 255);
+                }
+            }
+
+            halves.push(result);
+        }
+
+        return { left: halves[0], right: halves[1] };
+    }
+
+    return { extractCell, extractAllCells, splitCellHalves, CELL_SIZE };
 })();

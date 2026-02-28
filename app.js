@@ -11,7 +11,6 @@ const App = (() => {
     const btnStop = document.getElementById('btnStop');
 
     let cameraRunning = false;
-    let templatesReady = false;
     let debugLines = [];
 
     function init() {
@@ -51,14 +50,6 @@ const App = (() => {
 
         btnStart.textContent = 'SCAN';
         btnStop.classList.remove('hidden');
-
-        if (!templatesReady) {
-            setStatus('detecting', 'Generating templates...');
-            Templates.generate();
-            templatesReady = true;
-            debug('Templates ready');
-        }
-
         scan();
     }
 
@@ -95,7 +86,6 @@ const App = (() => {
             }
             debug('Frame: ' + frame.width + 'x' + frame.height);
 
-            // Step 1: Detect grid
             var det = Detector.detect(frame);
             if (!det) {
                 setStatus('error', 'Grid not found');
@@ -111,52 +101,22 @@ const App = (() => {
                 return;
             }
 
-            // Step 2: Extract all cells
             var extracted = Processor.extractAllCells(frame, det.gridCells, det.targetCells);
 
-            // Step 3: Detect charset from target cells
-            var targetHalves = [];
-            for (var i = 0; i < extracted.targetCells.length; i++) {
-                var h = Processor.splitCellHalves(extracted.targetCells[i]);
-                targetHalves.push(h.left);
-                targetHalves.push(h.right);
-            }
-            var charset = Matcher.detectCharset(targetHalves, Templates.getAllCharsets());
-            var templates = Templates.getCharset(charset);
-            debug('Charset: ' + charset);
-
-            // Step 4: Identify all codes
-            var targetCodes = [];
-            for (var t = 0; t < extracted.targetCells.length; t++) {
-                targetCodes.push(Matcher.identifyCode(extracted.targetCells[t], templates));
-            }
-            debug('Target: ' + targetCodes.join(' '));
-
-            var gridCodes = [];
-            for (var g = 0; g < extracted.gridCells.length; g++) {
-                gridCodes.push(Matcher.identifyCode(extracted.gridCells[g], templates));
-            }
-
-            // Step 5: Find match
-            var match = Matcher.findMatchByText(targetCodes, gridCodes);
+            // Primary: direct pixel matching (compare target pixels against grid pixels)
+            var match = Matcher.findMatch(extracted.targetCells, extracted.gridCells);
 
             var elapsed = Math.round(performance.now() - t0);
             debug('Time: ' + elapsed + 'ms');
 
-            if (match) {
+            if (match && match.confidence > 0.05) {
                 debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%)');
-                drawResult(det, match.position, targetCodes.length);
+                drawResult(det, match.position, extracted.targetCells.length);
                 positionEl.textContent = 'R' + match.row + ' C' + match.col;
                 positionEl.style.display = 'block';
                 setStatus('tracking', 'Row ' + match.row + ', Col ' + match.col);
             } else {
-                debug('NO MATCH');
-                debug('Target: ' + targetCodes.join(' '));
-                var cols = det.cols || 10;
-                var rows = Math.ceil(gridCodes.length / cols);
-                for (var r = 0; r < rows; r++) {
-                    debug('R' + (r + 1) + ': ' + gridCodes.slice(r * cols, r * cols + cols).join(' '));
-                }
+                debug('NO MATCH (conf: ' + (match ? Math.round(match.confidence * 100) + '%' : 'none') + ')');
                 setStatus('error', 'No match found');
             }
         } catch (err) {

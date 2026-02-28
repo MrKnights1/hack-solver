@@ -310,6 +310,38 @@ const OCR = (() => {
         return allCodes.length === rows * cols ? allCodes : null;
     }
 
+    async function ocrCellRow(frame, gridInfo, rowIdx, whitelist) {
+        const cols = gridInfo.cols || 10;
+        const codes = [];
+        const pad = 2;
+        const cellScale = 5;
+
+        await worker.setParameters({
+            tessedit_pageseg_mode: '8',
+            tessedit_char_whitelist: whitelist || ''
+        });
+
+        for (let c = 0; c < cols; c++) {
+            const cell = gridInfo.gridCells[rowIdx * cols + c];
+            const cx = Math.max(0, cell.x - pad);
+            const cy = Math.max(0, cell.y - pad);
+            const cw = Math.min(frame.width - cx, cell.w + pad * 2);
+            const ch = Math.min(frame.height - cy, cell.h + pad * 2);
+
+            const canvas = cropRegion(frame, cx, cy, cw, ch, cellScale);
+            if (!canvas) {
+                codes.push('??');
+                continue;
+            }
+
+            const result = await worker.recognize(canvas);
+            const text = result.data.text.trim().replace(CODE_CHARS_RE, '');
+            codes.push(text.length >= 1 && text.length <= 3 ? text : '??');
+        }
+
+        return codes;
+    }
+
     async function ocrGrid(frame, gridInfo, whitelist) {
         if (!gridInfo.gridCells || gridInfo.gridCells.length < 30) return null;
 
@@ -332,7 +364,27 @@ const OCR = (() => {
             }
 
             const result = await worker.recognize(canvas);
-            const codes = parseRowCodes(result.data.text.trim(), cols);
+            var codes = parseRowCodes(result.data.text.trim(), cols);
+
+            if (codes.length !== cols) {
+                const binCanvas = cropRegion(frame, crop.x, crop.y, crop.w, crop.h);
+                if (binCanvas) {
+                    binarize(binCanvas);
+                    const r2 = await worker.recognize(binCanvas);
+                    const c2 = parseRowCodes(r2.data.text.trim(), cols);
+                    if (c2.length === cols || c2.length > codes.length) {
+                        codes = c2;
+                    }
+                }
+            }
+
+            if (codes.length !== cols) {
+                await worker.setParameters({
+                    tessedit_pageseg_mode: '7',
+                    tessedit_char_whitelist: whitelist || ''
+                });
+                codes = await ocrCellRow(frame, gridInfo, r, whitelist);
+            }
 
             if (codes.length === cols) {
                 allCodes.push(...codes);
@@ -355,7 +407,7 @@ const OCR = (() => {
     }
 
     return {
-        init, ocrTarget, ocrGridBlock, ocrGrid, terminate,
+        init, ocrTarget, ocrGridBlock, ocrGrid, ocrCellRow, terminate,
         cropRegion, binarize, parseRowCodes, parseTargetCodes,
         normalizeText, normalizeCodes, guessWhitelist
     };

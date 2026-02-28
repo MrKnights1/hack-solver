@@ -133,16 +133,9 @@ const App = (() => {
             var wl = OCR.guessWhitelist(targetCodes);
             debug('Whitelist: ' + (wl || '(none)'));
 
-            // Step 4: OCR grid
+            // Step 4: OCR grid (row by row with binarization fallback)
             setStatus('detecting', 'Reading grid...');
-            var gridCodes = await OCR.ocrGridBlock(frame, det, wl);
-            if (gridCodes) {
-                debug('Grid block OK: ' + gridCodes.length + ' codes');
-            } else {
-                debug('Block failed, trying rows...');
-                setStatus('detecting', 'Reading rows...');
-                gridCodes = await OCR.ocrGrid(frame, det, wl);
-            }
+            var gridCodes = await OCR.ocrGrid(frame, det, wl);
 
             if (!gridCodes) {
                 debug('Grid OCR failed');

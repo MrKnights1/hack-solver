@@ -95,7 +95,6 @@ body {
     border-radius: 8px;
     z-index: 10;
     white-space: pre-wrap;
-    display: none;
     max-height: 40vh;
     overflow-y: auto;
 }

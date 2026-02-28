@@ -12,6 +12,7 @@ const App = (() => {
 
     let cameraRunning = false;
     let ocrReady = false;
+    let debugLines = [];
 
     function init() {
         Camera.init(videoEl);
@@ -27,8 +28,15 @@ const App = (() => {
         overlayCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
     }
 
+    // Debug output uses textContent with newlines, safe from XSS
     function debug(msg) {
-        debugEl.textContent = msg;
+        debugLines.push(msg);
+        debugEl.textContent = debugLines.join('\n');
+    }
+
+    function debugClear() {
+        debugLines = [];
+        debugEl.textContent = '';
     }
 
     async function handleStart() {
@@ -47,12 +55,14 @@ const App = (() => {
 
         if (!ocrReady) {
             setStatus('detecting', 'Loading OCR...');
+            debug('Loading Tesseract...');
             try {
                 await OCR.init();
                 ocrReady = true;
+                debug('OCR ready');
             } catch (err) {
                 setStatus('error', 'OCR failed to load');
-                debug(err.message);
+                debug('OCR error: ' + err.message);
                 return;
             }
         }
@@ -67,7 +77,7 @@ const App = (() => {
         btnStop.classList.add('hidden');
         positionEl.style.display = 'none';
         clearOverlay();
-        debug('');
+        debugClear();
         setStatus('idle', 'Tap START to begin');
     }
 
@@ -80,81 +90,90 @@ const App = (() => {
         setStatus('detecting', 'Scanning...');
         clearOverlay();
         positionEl.style.display = 'none';
+        debugClear();
         btnStart.disabled = true;
 
         try {
-            const frame = Camera.captureFrame();
+            var frame = Camera.captureFrame();
             if (!frame) {
-                setStatus('error', 'No frame - tap SCAN');
-                debug('captureFrame returned null');
+                setStatus('error', 'No frame');
+                debug('captureFrame null');
                 return;
             }
+            debug('Frame: ' + frame.width + 'x' + frame.height);
 
-            // Step 1: Detect grid structure
-            const detection = Detector.detect(frame);
-            if (!detection) {
-                setStatus('error', 'Grid not found - tap SCAN');
+            // Step 1: Detect grid
+            var det = Detector.detect(frame);
+            if (!det) {
+                setStatus('error', 'Grid not found');
                 debug('Detector returned null');
                 return;
             }
 
-            const gc = detection.gridCells.length;
-            const tc = detection.targetCells ? detection.targetCells.length : 0;
-            debug(`Detected: ${gc} grid, ${tc} target`);
+            var gc = det.gridCells.length;
+            var tc = det.targetCells ? det.targetCells.length : 0;
+            debug('Grid: ' + gc + ' cells, Target: ' + tc + ' cells');
 
             if (gc < 30 || tc < 3) {
-                setStatus('error', `Need 30+ grid & 3+ target, got ${gc}/${tc}`);
+                setStatus('error', 'Not enough cells: ' + gc + '/' + tc);
                 return;
             }
 
-            // Step 2: OCR target codes
+            // Step 2: OCR target
             setStatus('detecting', 'Reading target...');
-            const targetCodes = await OCR.ocrTarget(frame, detection);
+            var targetCodes = await OCR.ocrTarget(frame, det);
             if (!targetCodes || targetCodes.length < 2) {
-                setStatus('error', 'Could not read target codes');
-                debug(`Target OCR failed`);
+                debug('Target OCR failed');
+                setStatus('error', 'Cannot read target');
                 return;
             }
-            debug(`Target: ${targetCodes.join(' ')}`);
+            debug('Target: ' + targetCodes.join(' '));
 
-            // Step 3: Guess whitelist from target codes
-            const whitelist = OCR.guessWhitelist(targetCodes);
+            // Step 3: Whitelist
+            var wl = OCR.guessWhitelist(targetCodes);
+            debug('Whitelist: ' + (wl || '(none)'));
 
-            // Step 4: OCR grid (block mode for speed)
+            // Step 4: OCR grid
             setStatus('detecting', 'Reading grid...');
-            let gridCodes = await OCR.ocrGridBlock(frame, detection, whitelist);
-
-            // Fallback to per-row OCR if block failed
-            if (!gridCodes) {
-                setStatus('detecting', 'Reading grid (row by row)...');
-                gridCodes = await OCR.ocrGrid(frame, detection, whitelist);
+            var gridCodes = await OCR.ocrGridBlock(frame, det, wl);
+            if (gridCodes) {
+                debug('Grid block OK: ' + gridCodes.length + ' codes');
+            } else {
+                debug('Block failed, trying rows...');
+                setStatus('detecting', 'Reading rows...');
+                gridCodes = await OCR.ocrGrid(frame, det, wl);
             }
 
             if (!gridCodes) {
-                setStatus('error', 'Could not read grid');
-                debug(`Target: ${targetCodes.join(' ')} | Grid OCR failed`);
+                debug('Grid OCR failed');
+                setStatus('error', 'Cannot read grid');
                 return;
             }
 
-            // Step 5: Normalize and text match
-            const normTarget = OCR.normalizeCodes(targetCodes);
-            const normGrid = OCR.normalizeCodes(gridCodes);
+            debug('Grid: ' + gridCodes.length + ' codes');
 
-            const match = Matcher.findMatchByText(normTarget, normGrid);
-            if (!match) {
-                setStatus('error', 'No match in grid');
-                debug(`Target: ${normTarget.join(' ')} | Grid: ${normGrid.length} codes, no match`);
-                return;
+            // Step 5: Normalize and match
+            var normTarget = OCR.normalizeCodes(targetCodes);
+            var normGrid = OCR.normalizeCodes(gridCodes);
+
+            var match = Matcher.findMatchByText(normTarget, normGrid);
+            if (match) {
+                debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%)');
+                drawResult(det, match.position, normTarget.length);
+                positionEl.textContent = 'R' + match.row + ' C' + match.col;
+                positionEl.style.display = 'block';
+                setStatus('tracking', 'Row ' + match.row + ', Col ' + match.col);
+            } else {
+                debug('NO MATCH');
+                debug('Target: ' + normTarget.join(' '));
+                for (var r = 0; r < 8; r++) {
+                    debug('R' + (r + 1) + ': ' + normGrid.slice(r * 10, r * 10 + 10).join(' '));
+                }
+                setStatus('error', 'No match found');
             }
-
-            // Step 6: Draw result
-            const cols = match.cols || 10;
-            debug(`Target: ${normTarget.join(' ')} → R${match.row}C${match.col} (${Math.round(match.confidence * 100)}%)`);
-
-            drawResult(detection, match.position, normTarget.length);
-            positionEl.textContent = `R${match.row} C${match.col}`;
-            positionEl.style.display = 'block';
-            setStatus('tracking', `Found: Row ${match.row}, Col ${match.col}`);
+        } catch (err) {
+            debug('Error: ' + err.message);
+            setStatus('error', 'Scan failed');
         } finally {
             btnStart.disabled = false;
         }
@@ -163,25 +182,25 @@ const App = (() => {
     function drawResult(detection, position, numTargets) {
         clearOverlay();
 
-        const dims = Camera.getVideoDimensions();
+        var dims = Camera.getVideoDimensions();
         if (!dims.videoWidth) return;
 
-        const scaleX = dims.displayWidth / dims.videoWidth;
-        const scaleY = dims.displayHeight / dims.videoHeight;
+        var scaleX = dims.displayWidth / dims.videoWidth;
+        var scaleY = dims.displayHeight / dims.videoHeight;
 
         overlayCtx.strokeStyle = '#22c55e';
         overlayCtx.lineWidth = 3;
         overlayCtx.shadowColor = '#22c55e';
         overlayCtx.shadowBlur = 12;
 
-        for (let t = 0; t < numTargets; t++) {
-            const gridIdx = (position + t) % detection.gridCells.length;
-            const blob = detection.gridCells[gridIdx];
+        for (var t = 0; t < numTargets; t++) {
+            var gridIdx = (position + t) % detection.gridCells.length;
+            var blob = detection.gridCells[gridIdx];
 
-            const x = (blob.x - 4) * scaleX;
-            const y = (blob.y - 4) * scaleY;
-            const w = (blob.w + 8) * scaleX;
-            const h = (blob.h + 8) * scaleY;
+            var x = (blob.x - 4) * scaleX;
+            var y = (blob.y - 4) * scaleY;
+            var w = (blob.w + 8) * scaleX;
+            var h = (blob.h + 8) * scaleY;
 
             overlayCtx.fillStyle = 'rgba(34, 197, 94, 0.2)';
             overlayCtx.fillRect(x, y, w, h);
@@ -193,12 +212,12 @@ const App = (() => {
         overlayCtx.lineWidth = 2;
         overlayCtx.shadowBlur = 5;
 
-        for (let t = 0; t < numTargets; t++) {
-            const gridIdx = (position + t) % detection.gridCells.length;
-            const blob = detection.gridCells[gridIdx];
-            const cx = blob.cx * scaleX;
-            const cy = blob.cy * scaleY;
-            if (t === 0) overlayCtx.moveTo(cx, cy);
+        for (var t2 = 0; t2 < numTargets; t2++) {
+            var gridIdx2 = (position + t2) % detection.gridCells.length;
+            var blob2 = detection.gridCells[gridIdx2];
+            var cx = blob2.cx * scaleX;
+            var cy = blob2.cy * scaleY;
+            if (t2 === 0) overlayCtx.moveTo(cx, cy);
             else overlayCtx.lineTo(cx, cy);
         }
         overlayCtx.stroke();

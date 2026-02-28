@@ -182,36 +182,34 @@ const Detector = (() => {
     }
 
     /**
-     * Find target row: look for a band above the grid that has
-     * ~4 text elements (not 10). The target row is narrower than grid rows.
+     * Find target row: the row of 4 codes immediately above the grid.
      *
-     * Strategy: compare the horizontal text extent of each candidate band
-     * to the grid width. Target has 4/10 = 40% of the width.
-     */
-    /**
-     * Find target row: look for a band above the grid that has
-     * ~4 text elements (not 10). Collects all candidates and picks
-     * the one with highest text density (peak). Also merges adjacent
-     * bands that are part of the same large text (e.g. "ΟΣ ΥΠ ΟΕ ΤΑ"
-     * may split into upper/lower sub-bands).
+     * Key filters:
+     * - Width is ~30-65% of grid width (4 codes vs 10 columns)
+     * - Height is similar to grid row height (same font, not a header)
+     * - Centered on grid
+     * - Closest matching band to grid wins (target codes sit right above grid)
      */
     function findTargetBand(rowBands, bestGroup, gridLeft, gridRight, gray) {
         const { data, width } = gray;
         const gridWidth = gridRight - gridLeft;
         const gridCenter = (gridLeft + gridRight) / 2;
-
-        const candidates = [];
+        const gridRowHeight = bestGroup.rows[0].end - bestGroup.rows[0].start;
 
         for (let i = bestGroup.startIdx - 1; i >= 0; i--) {
             const band = rowBands[i];
 
             const gapFromGrid = bestGroup.rows[0].center - band.center;
-            if (gapFromGrid > bestGroup.spacing * 8) break;
+            if (gapFromGrid > bestGroup.spacing * 5) break;
 
             const bStart = band.start;
             const bEnd = band.end;
             const bRows = bEnd - bStart;
             if (bRows < 2) continue;
+
+            // Band height should be similar to grid row height (reject headers)
+            const heightRatio = bRows / gridRowHeight;
+            if (heightRatio > 2.5 || heightRatio < 0.3) continue;
 
             const bColMean = new Float64Array(width);
             const bColVar = new Float64Array(width);
@@ -250,43 +248,17 @@ const Detector = (() => {
             const centerOffset = Math.abs(bandCenter - gridCenter) / gridWidth;
 
             if (widthRatio >= 0.20 && widthRatio <= 0.65 && centerOffset < 0.3) {
-                candidates.push({ bandIdx: i, tLeft, tRight, peak: band.peak });
+                // Closest valid band to grid wins — no merging with headers above
+                return {
+                    bandIdx: i,
+                    bandEndIdx: i,
+                    tLeft,
+                    tRight
+                };
             }
         }
 
-        if (candidates.length === 0) return null;
-
-        // If multiple adjacent candidates, merge them into one target region
-        // (large target text can split into sub-bands)
-        candidates.sort((a, b) => a.bandIdx - b.bandIdx);
-
-        let bestStart = candidates[0].bandIdx;
-        let bestEnd = candidates[0].bandIdx;
-        let bestLeft = candidates[0].tLeft;
-        let bestRight = candidates[0].tRight;
-        let bestPeak = candidates[0].peak;
-
-        for (let c = 1; c < candidates.length; c++) {
-            if (candidates[c].bandIdx === candidates[c - 1].bandIdx + 1) {
-                bestEnd = candidates[c].bandIdx;
-                bestLeft = Math.min(bestLeft, candidates[c].tLeft);
-                bestRight = Math.max(bestRight, candidates[c].tRight);
-                bestPeak = Math.max(bestPeak, candidates[c].peak);
-            } else if (candidates[c].peak > bestPeak) {
-                bestStart = candidates[c].bandIdx;
-                bestEnd = candidates[c].bandIdx;
-                bestLeft = candidates[c].tLeft;
-                bestRight = candidates[c].tRight;
-                bestPeak = candidates[c].peak;
-            }
-        }
-
-        return {
-            bandIdx: bestStart,
-            bandEndIdx: bestEnd,
-            tLeft: bestLeft,
-            tRight: bestRight
-        };
+        return null;
     }
 
     function buildGridCells(bestGroup, gridLeft, gridRight, numCols) {

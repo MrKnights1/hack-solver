@@ -142,6 +142,23 @@ const App = (() => {
                 gridHalves.push(Processor.splitCellHalves(extracted.gridCells[gi]));
             }
 
+            // Debug: show character recognition quality for alphabet charset
+            var alphaTemplates = Templates.getCharset('alphabet');
+            if (alphaTemplates && targetHalves.length > 0) {
+                var dbgLeft = Matcher.identifyChar(targetHalves[0].left, alphaTemplates);
+                var dbgRight = Matcher.identifyChar(targetHalves[0].right, alphaTemplates);
+                debug('OCR t0: ' + dbgLeft.char + '(' + dbgLeft.distance.toFixed(3) + ') ' +
+                      dbgRight.char + '(' + dbgRight.distance.toFixed(3) + ')');
+                // Show pixel stats of first target half
+                var h0 = targetHalves[0].left;
+                var hMin = 255, hMax = 0;
+                for (var pi = 0; pi < h0.length; pi++) {
+                    if (h0[pi] < hMin) hMin = h0[pi];
+                    if (h0[pi] > hMax) hMax = h0[pi];
+                }
+                debug('Half0: min=' + hMin + ' max=' + hMax + ' len=' + h0.length);
+            }
+
             // Multi-strategy: try ALL charsets using pre-computed halves
             var allCharsets = Templates.getAllCharsets();
             var charsetNames = Object.keys(allCharsets);
@@ -163,6 +180,11 @@ const App = (() => {
                     tCodes.push(lc.char + rc.char);
                 }
 
+                // Log what alphabet reads
+                if (csName === 'alphabet') {
+                    debug('alpha: ' + tCodes.join(' '));
+                }
+
                 var gCodes = [];
                 for (var gj = 0; gj < gridHalves.length; gj++) {
                     var glc = Matcher.identifyChar(gridHalves[gj].left, tpls);
@@ -174,6 +196,13 @@ const App = (() => {
                 if (m && m.score < bestScore) {
                     bestScore = m.score;
                     bestMatch = m;
+                    bestCharset = csName;
+                    bestTargetCodes = tCodes;
+                    bestGridCodes = gCodes;
+                }
+
+                // If no text match, still track best charset for debug display
+                if (!bestTargetCodes) {
                     bestCharset = csName;
                     bestTargetCodes = tCodes;
                     bestGridCodes = gCodes;

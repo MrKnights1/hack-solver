@@ -109,14 +109,14 @@ const App = (() => {
             var elapsed = Math.round(performance.now() - t0);
             debug('Time: ' + elapsed + 'ms');
 
-            if (match && match.confidence > 0.05) {
-                debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%)');
+            if (match) {
+                debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%) score=' + match.score.toFixed(2));
                 drawResult(det, match.position, extracted.targetCells.length);
                 positionEl.textContent = 'R' + match.row + ' C' + match.col;
                 positionEl.style.display = 'block';
                 setStatus('tracking', 'Row ' + match.row + ', Col ' + match.col);
             } else {
-                debug('NO MATCH (conf: ' + (match ? Math.round(match.confidence * 100) + '%' : 'none') + ')');
+                debug('NO MATCH');
                 setStatus('error', 'No match found');
             }
         } catch (err) {

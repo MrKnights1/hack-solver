@@ -159,6 +159,16 @@ const Detector = (() => {
             const groupMinPeak = Math.min(...group.map(b => b.peak));
             if (groupMinPeak < minDensity) continue;
 
+            // Skip groups containing solid UI bands (buttons/tabs have very high fill)
+            const groupMaxPeak = Math.max(...group.map(b => b.peak));
+            if (groupMaxPeak > 0.6) continue;
+
+            // Skip groups with inconsistent band heights (mixed UI + text)
+            const heights = group.map(b => b.end - b.start);
+            const avgHeight = heights.reduce((a, b) => a + b, 0) / 8;
+            const heightVar = heights.reduce((s, h) => s + (h - avgHeight) ** 2, 0) / 8;
+            if (heightVar / (avgHeight * avgHeight + 1) > 0.5) continue;
+
             const spacings = [];
             for (let j = 1; j < group.length; j++) {
                 spacings.push(group[j].center - group[j - 1].center);

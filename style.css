@@ -192,16 +192,13 @@ body {
 
 #debugCanvas {
     position: absolute;
-    top: 55px;
-    right: 8px;
-    z-index: 9;
+    bottom: 160px;
+    left: 8px;
+    z-index: 20;
     background: rgba(0, 0, 0, 0.85);
     border: 1px solid #333;
     border-radius: 6px;
     image-rendering: pixelated;
-    max-width: 50vw;
-    max-height: 30vh;
-    display: none;
 }
 
 .hidden {

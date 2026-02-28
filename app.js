@@ -20,9 +20,7 @@ const App = (() => {
         Camera.init(videoEl);
         btnStart.addEventListener('click', handleStart);
         btnStop.addEventListener('click', handleStop);
-        debugEl.addEventListener('click', function() {
-            debugCanvas.style.display = debugCanvas.style.display === 'none' ? 'block' : 'none';
-        });
+        debugCanvas.style.display = 'none';
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
         autoStartCamera();
@@ -233,6 +231,7 @@ const App = (() => {
             }
 
             // Visual debug
+            debugCanvas.style.display = 'block';
             drawDebugCells(
                 extracted.targetCells, extracted.gridCells,
                 bestTargetCodes, bestGridCodes, bestCharset

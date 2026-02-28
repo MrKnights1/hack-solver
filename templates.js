@@ -128,13 +128,27 @@ const Templates = (() => {
         return result;
     }
 
+    function binarize(pixels) {
+        var min = 255, max = 0;
+        for (var i = 0; i < pixels.length; i++) {
+            if (pixels[i] < min) min = pixels[i];
+            if (pixels[i] > max) max = pixels[i];
+        }
+        var threshold = (min + max) / 2;
+        var binary = new Uint8Array(pixels.length);
+        for (var i = 0; i < pixels.length; i++) {
+            binary[i] = pixels[i] > threshold ? 255 : 0;
+        }
+        return binary;
+    }
+
     function generateCharset(charString, fontSize) {
         var chars = Array.from(charString);
         var templates = [];
         for (var i = 0; i < chars.length; i++) {
             var rendered = renderChar(chars[i], fontSize);
             var pixels = tightCropAndNormalize(rendered.gray, rendered.w, rendered.h);
-            templates.push({ char: chars[i], pixels: pixels });
+            templates.push({ char: chars[i], pixels: pixels, binary: binarize(pixels) });
         }
         return templates;
     }

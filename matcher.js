@@ -220,13 +220,13 @@ const Matcher = (() => {
      * Returns { char, distance } for the best match.
      */
     function identifyChar(halfPixels, charsetTemplates) {
-        const halfBin = toBinary(halfPixels);
-        let bestChar = '?';
-        let bestDist = 1;
+        var halfBin = toBinary(halfPixels);
+        var bestChar = '?';
+        var bestDist = 1;
 
-        for (let i = 0; i < charsetTemplates.length; i++) {
-            const tplBin = toBinary(charsetTemplates[i].pixels);
-            const dist = hammingDist(halfBin, tplBin);
+        for (var i = 0; i < charsetTemplates.length; i++) {
+            var tplBin = charsetTemplates[i].binary || toBinary(charsetTemplates[i].pixels);
+            var dist = hammingDist(halfBin, tplBin);
             if (dist < bestDist) {
                 bestDist = dist;
                 bestChar = charsetTemplates[i].char;
@@ -249,23 +249,44 @@ const Matcher = (() => {
 
     /**
      * Detect which charset best matches sample half-cells.
-     * allCharsets: { numeric: [{char, pixels}...], alphabet: [...], ... }
+     * Uses distinctiveness: the gap between best and second-best template match.
+     * The correct charset will have high gaps (clear best match per character).
+     * Wrong charsets (especially large ones like braille) have low gaps.
      */
     function detectCharset(sampleHalves, allCharsets) {
-        let bestName = 'numeric';
-        let bestScore = Infinity;
+        var bestName = 'numeric';
+        var bestScore = -Infinity;
 
-        const names = Object.keys(allCharsets);
-        for (let n = 0; n < names.length; n++) {
-            const templates = allCharsets[names[n]];
-            let totalDist = 0;
-            for (let s = 0; s < sampleHalves.length; s++) {
-                const result = identifyChar(sampleHalves[s], templates);
-                totalDist += result.distance;
+        var sampleBins = [];
+        for (var s = 0; s < sampleHalves.length; s++) {
+            sampleBins.push(toBinary(sampleHalves[s]));
+        }
+
+        var names = Object.keys(allCharsets);
+        for (var n = 0; n < names.length; n++) {
+            var templates = allCharsets[names[n]];
+            var totalGap = 0;
+
+            for (var s2 = 0; s2 < sampleBins.length; s2++) {
+                var halfBin = sampleBins[s2];
+                var bd = 1, sd = 1;
+
+                for (var i = 0; i < templates.length; i++) {
+                    var tplBin = templates[i].binary || toBinary(templates[i].pixels);
+                    var dist = hammingDist(halfBin, tplBin);
+                    if (dist < bd) {
+                        sd = bd;
+                        bd = dist;
+                    } else if (dist < sd) {
+                        sd = dist;
+                    }
+                }
+                totalGap += (sd - bd);
             }
-            const avgDist = totalDist / sampleHalves.length;
-            if (avgDist < bestScore) {
-                bestScore = avgDist;
+
+            var avgGap = totalGap / sampleBins.length;
+            if (avgGap > bestScore) {
+                bestScore = avgGap;
                 bestName = names[n];
             }
         }

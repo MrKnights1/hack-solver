@@ -110,7 +110,13 @@ const App = (() => {
             debug('Time: ' + elapsed + 'ms');
 
             if (match) {
-                debug('MATCH R' + match.row + ' C' + match.col + ' (' + Math.round(match.confidence * 100) + '%) score=' + match.score.toFixed(2));
+                debug('MATCH R' + match.row + ' C' + match.col + ' conf=' + Math.round(match.confidence * 100) + '%');
+                if (match.top3) {
+                    for (var ti = 0; ti < match.top3.length; ti++) {
+                        var m = match.top3[ti];
+                        debug('  #' + (ti + 1) + ' R' + m.row + 'C' + m.col + ' s=' + m.score.toFixed(3));
+                    }
+                }
                 drawResult(det, match.position, extracted.targetCells.length);
                 positionEl.textContent = 'R' + match.row + ' C' + match.col;
                 positionEl.style.display = 'block';
